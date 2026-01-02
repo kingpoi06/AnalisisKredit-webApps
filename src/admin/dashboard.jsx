@@ -1,7 +1,9 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import Sidebar from "../component/sidebar";
 import Header from "../component/header";
 import { useNavigate } from "react-router-dom";
+import { jwtDecode } from "jwt-decode";
+import axios from "axios";
 import {
   FaUsers,
   FaFileInvoiceDollar,
@@ -11,151 +13,197 @@ import {
 export default function Dashboard() {
   const navigate = useNavigate();
 
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({
+    totalAktivitas: 0,
+    kreditAktif: 0,
+    kreditPengajuan: 0,
+  });
+
+  const [listKredit, setListKredit] = useState([]);
+  const [filterStatus, setFilterStatus] = useState("ALL");
+
+
+  const apiUrl = "http://localhost:8080"; // backend
+
+  /* ===============================
+     🔐 AUTH & FETCH DASHBOARD
+  =============================== */
+  useEffect(() => {
+    const token = localStorage.getItem("accessToken");
+
+    if (!token) {
+      navigate("/");
+      return;
+    }
+
+    try {
+      const decoded = jwtDecode(token);
+      const now = Date.now() / 1000;
+
+      if (decoded.exp < now) {
+        localStorage.removeItem("accessToken");
+        navigate("/");
+        return;
+      }
+
+      // set header axios
+      axios.defaults.headers.common[
+        "Authorization"
+      ] = `Bearer ${token}`;
+
+      fetchDashboard();
+    } catch (err) {
+      console.error("Token error:", err);
+      localStorage.removeItem("accessToken");
+      navigate("/");
+    }
+  }, [navigate]);
+
+  /* ===============================
+     📡 FETCH DASHBOARD DATA
+  =============================== */
+  const fetchDashboard = async () => {
+    try {
+      const res = await axios.get(`${apiUrl}/datanasabah/data-diri`);
+      setStats({
+        totalAktivitas: res.data.totalAktivitas,
+        kreditAktif: res.data.kreditAktif,
+        kreditPengajuan: res.data.kreditPengajuan,
+      });
+      setListKredit(res.data.listKredit || []);
+    } catch (err) {
+      console.error("Fetch dashboard gagal:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="h-screen flex items-center justify-center">
+        Loading dashboard...
+      </div>
+    );
+  }
+  
+   /* ===============================
+     🔍 FILTERED DATA
+  =============================== */
+  const filteredKredit =
+    filterStatus === "ALL"
+      ? listKredit
+      : listKredit.filter(
+          (item) => item.status === filterStatus
+        );
+
+  if (loading) {
+    return <div className="h-screen flex items-center justify-center">Loading...</div>;
+  }
+
   return (
     <div className="min-h-screen bg-gray-100">
-      {/* SIDEBAR */}
       <Sidebar />
 
-      {/* MAIN CONTENT */}
       <div className="md:ml-64">
         <Header />
 
-        <main className="pt-16 md:pt-20 px-4 sm:px-6 md:px-8 pb-10">
-          {/* PAGE TITLE */}
+        <main className="pt-16 md:pt-20 px-4 pb-10">
+          {/* TITLE */}
           <div className="mb-6 flex items-center gap-3">
             <div className="bg-indigo-100 text-indigo-600 p-3 rounded-xl">
-              <FaBriefcase className="text-lg md:text-xl" />
+              <FaBriefcase />
             </div>
-
             <div>
-              <h1 className="text-xl md:text-2xl font-bold text-gray-800">
-                Dashboard
-              </h1>
+              <h1 className="text-2xl font-bold">Dashboard</h1>
               <p className="text-sm text-gray-500">
                 Selamat datang di sistem
               </p>
             </div>
           </div>
 
-          {/* STAT CARDS */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6 mb-8">
-
-            {/* TOTAL AKTIVITAS */}
-            <div className="bg-white rounded-xl shadow-sm p-4 md:p-6 flex items-center gap-4">
-              <div className="bg-indigo-100 text-indigo-600 p-3 md:p-4 rounded-lg">
-                <FaUsers className="text-lg md:text-xl" />
-              </div>
-              <div>
-                <p className="text-xs md:text-sm text-gray-500">
-                  Total Aktivitas
-                </p>
-                <h2 className="text-2xl md:text-3xl font-bold text-gray-800">
-                  0
-                </h2>
-              </div>
-            </div>
-
-            {/* KREDIT AKTIF */}
-            <div className="bg-white rounded-xl shadow-sm p-4 md:p-6 flex items-center gap-4">
-              <div className="bg-green-100 text-green-600 p-3 md:p-4 rounded-lg">
-                <FaFileInvoiceDollar className="text-lg md:text-xl" />
-              </div>
-              <div>
-                <p className="text-xs md:text-sm text-gray-500">
-                  Kredit Aktif
-                </p>
-                <h2 className="text-2xl md:text-3xl font-bold text-gray-800">
-                  0
-                </h2>
-              </div>
-            </div>
-
-            {/* KREDIT TAHAP PENGAJUAN */}
-            <div className="bg-white rounded-xl shadow-sm p-4 md:p-6 flex items-center gap-4">
-              <div className="bg-yellow-100 text-yellow-600 p-3 md:p-4 rounded-lg">
-                <FaFileInvoiceDollar className="text-lg md:text-xl" />
-              </div>
-              <div>
-                <p className="text-xs md:text-sm text-gray-500">
-                  Kredit Tahap Pengajuan
-                </p>
-                <h2 className="text-2xl md:text-3xl font-bold text-gray-800">
-                  0
-                </h2>
-              </div>
-            </div>
-
+          {/* STATS */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-8">
+            <StatCard
+              title="Total Aktivitas"
+              value={stats.totalAktivitas}
+              icon={<FaUsers />}
+              color="indigo"
+            />
+            <StatCard
+              title="Kredit Aktif"
+              value={stats.kreditAktif}
+              icon={<FaFileInvoiceDollar />}
+              color="green"
+            />
+            <StatCard
+              title="Kredit Tahap Pengajuan"
+              value={stats.kreditPengajuan}
+              icon={<FaFileInvoiceDollar />}
+              color="yellow"
+            />
           </div>
 
-          {/* TABLE SECTION */}
+          {/* TABLE */}
           <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 md:px-6 py-4 border-b">
-              <h3 className="font-semibold text-gray-700">
-                Monitoring Kredit
-              </h3>
-
+            <div className="px-6 py-4 border-b flex justify-between">
+              <h3 className="font-semibold">Monitoring Kredit</h3>
               <button
                 onClick={() => navigate("/master-data/data-diri")}
-                className="bg-indigo-600 hover:bg-indigo-700
-                text-white px-4 py-2 rounded-md text-sm transition
-                w-full sm:w-auto"
+                className="bg-indigo-600 text-white px-4 py-2 rounded"
               >
                 + Tambah Data
               </button>
             </div>
 
-            {/* MOBILE */}
-            <div className="block md:hidden p-4 space-y-4">
-              <div className="border rounded-xl p-4 shadow-sm space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">No</span>
-                  <span className="font-medium">1</span>
-                </div>
-
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Nama Nasabah</span>
-                  <span className="font-medium">—</span>
-                </div>
-
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-gray-500">Status</span>
-                  <span className="bg-gray-200 text-gray-600 text-xs px-3 py-1 rounded-full">
-                    Belum Ada
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* DESKTOP */}
-            <div className="hidden md:block overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 text-gray-600">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left">No</th>
+                  <th className="px-6 py-3 text-left">Nama Nasabah</th>
+                  <th className="px-6 py-3 text-left">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {listKredit.length === 0 ? (
                   <tr>
-                    <th className="px-6 py-3 text-left font-medium">No</th>
-                    <th className="px-6 py-3 text-left font-medium">
-                      Nama Nasabah
-                    </th>
-                    <th className="px-6 py-3 text-left font-medium">
-                      Status Pengajuan
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="border-t hover:bg-gray-50 transition">
-                    <td className="px-6 py-4">1</td>
-                    <td className="px-6 py-4">—</td>
-                    <td className="px-6 py-4">
-                      <span className="bg-gray-200 text-gray-600 text-xs px-3 py-1 rounded-full">
-                        Belum Ada
-                      </span>
+                    <td colSpan="3" className="px-6 py-4 text-center">
+                      Data belum tersedia
                     </td>
                   </tr>
-                </tbody>
-              </table>
-            </div>
+                ) : (
+                  listKredit.map((item, index) => (
+                    <tr key={item.id} className="border-t">
+                      <td className="px-6 py-4">{index + 1}</td>
+                      <td className="px-6 py-4">{item.namalengkap}</td>
+                      <td className="px-6 py-4">
+                        <span className="bg-gray-200 px-3 py-1 rounded-full text-xs">
+                          {item.statusPengajuan}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </main>
       </div>
     </div>
   );
 }
+
+/* ===============================
+   🔹 COMPONENT CARD
+=============================== */
+const StatCard = ({ title, value, icon, color }) => (
+  <div className="bg-white rounded-xl p-6 shadow-sm flex gap-4">
+    <div className={`bg-${color}-100 text-${color}-600 p-3 rounded-lg`}>
+      {icon}
+    </div>
+    <div>
+      <p className="text-sm text-gray-500">{title}</p>
+      <h2 className="text-3xl font-bold">{value}</h2>
+    </div>
+  </div>
+);

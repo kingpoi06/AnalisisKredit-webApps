@@ -1,5 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+
+import axios from "axios";
+import { jwtDecode } from "jwt-decode";
 
 import Logo from "./bpr.png";
 import Illustration from "./illustration.png";
@@ -8,13 +11,76 @@ const Login = () => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const navigate = useNavigate();
+  const [msg, setMsg] = useState("");
 
-  const handleLogin = (e) => {
+  const apiUrl = "http://localhost:8080";
+
+const handleLogin = async (e) => {
     e.preventDefault();
+    setMsg("");
 
-    // 🔥 TANPA FETCH / TANPA AUTH
-    navigate("/dashboard", { replace: true });
+    try {
+      const response = await axios.post(
+        `${apiUrl}/login`,
+        { username, password },
+        { withCredentials: true }
+      );
+
+      const { accessToken } = response.data;
+
+      if (!accessToken) {
+        setMsg("Token tidak ditemukan");
+        return;
+      }
+
+      const decoded = jwtDecode(accessToken);
+      const role = decoded.role?.toLowerCase();
+
+      // simpan token
+      localStorage.setItem("accessToken", accessToken);
+
+      axios.defaults.headers.common[
+        "Authorization"
+      ] = `Bearer ${accessToken}`;
+
+      // 🔑 ROUTING BERDASARKAN ROLE
+      switch (role) {
+        case "officer":
+          navigate("/dashboard");
+          break;
+        case "ketuacabang":
+          navigate("/dashboard-acc");
+          break;
+        case "dirut":
+          navigate("/dashboard-monitoring-dirut");
+          break;
+        default:
+          setMsg("Role tidak dikenali");
+      }
+    } catch (error) {
+      console.error(error);
+      setMsg(
+        error.response?.data?.msg || "Login gagal, silakan coba lagi"
+      );
+    }
   };
+
+  // 🔁 Auto redirect jika sudah login
+  useEffect(() => {
+    const token = localStorage.getItem("accessToken");
+    if (token) {
+      try {
+        const decoded = jwtDecode(token);
+        const role = decoded.role?.toLowerCase();
+
+        if (role === "officer") navigate("/dashboard");
+        if (role === "ketuacabang") navigate("/dashboard-acc");
+        if (role === "dirut") navigate("/dashboard-monitoring-dirut");
+      } catch (err) {
+        localStorage.removeItem("accessToken");
+      }
+    }
+  }, [navigate]);
 
   return (
     <div className="min-h-screen grid grid-cols-1 md:grid-cols-2 font-sans">
@@ -62,7 +128,7 @@ const Login = () => {
             <button
               type="submit"
               className="w-full py-3 rounded-md 
-              bg-blue-600 text-black font-semibold
+              bg-success-600 text-black font-semibold
               hover:bg-blue-700 transition-all duration-200"
             >
               LOGIN
