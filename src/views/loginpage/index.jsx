@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 import axios from "axios";
 import { jwtDecode } from "jwt-decode";
+import { API_ENDPOINTS } from "../../config/apiEndpoints";
 
 import Logo from "./bpr.png";
 import Illustration from "./illustration.png";
@@ -13,15 +14,13 @@ const Login = () => {
   const navigate = useNavigate();
   const [msg, setMsg] = useState("");
 
-  const apiUrl = "http://localhost:8080";
-
 const handleLogin = async (e) => {
     e.preventDefault();
     setMsg("");
 
     try {
       const response = await axios.post(
-        `${apiUrl}/login`,
+        API_ENDPOINTS.auth.login(),
         { username, password },
         { withCredentials: true }
       );
@@ -48,11 +47,11 @@ const handleLogin = async (e) => {
         case "officer":
           navigate("/dashboard");
           break;
-        case "ketuacabang":
-          navigate("/dashboard-acc");
+        case "komitecabang":
+          navigate("/dashboard");
           break;
-        case "dirut":
-          navigate("/dashboard-monitoring-dirut");
+        case "superadmin":
+          navigate("/dashboard-monitoring-users");
           break;
         default:
           setMsg("Role tidak dikenali");
@@ -74,8 +73,8 @@ const handleLogin = async (e) => {
         const role = decoded.role?.toLowerCase();
 
         if (role === "officer") navigate("/dashboard");
-        if (role === "ketuacabang") navigate("/dashboard-acc");
-        if (role === "dirut") navigate("/dashboard-monitoring-dirut");
+        if (role === "komitecabang") navigate("/dashboard-acc");
+        if (role === "superadmin") navigate("/dashboard-monitoring-users");
       } catch (err) {
         localStorage.removeItem("accessToken");
       }
@@ -156,7 +155,7 @@ const handleLogin = async (e) => {
           className="px-8 py-2.5 border border-gray-700 rounded-md
           hover:bg-gray-700 hover:text-white transition"
         >
-          START DASHBOARD
+          CONTACT PERSON
         </button>
       </div>
     </div>

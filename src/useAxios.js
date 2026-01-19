@@ -1,12 +1,13 @@
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState, useRef } from "react";
+import { API_BASE_URL, API_ENDPOINTS } from "./config/apiEndpoints";
 
 const useAxios = () => {
   const navigate = useNavigate();
   const axiosInstance = useRef(
     axios.create({
-      baseURL: "http://localhost:8080",
+      baseURL: API_BASE_URL,
       withCredentials: true,
     })
   ).current;
@@ -28,7 +29,7 @@ const useAxios = () => {
   const getNewAccessToken = async () => {
     setIsRefreshing(true);
     try {
-      const response = await axiosInstance.post("/token");
+      const response = await axiosInstance.post(API_ENDPOINTS.auth.token());
       const { accessToken } = response.data;
 
       localStorage.setItem("accessToken", accessToken);

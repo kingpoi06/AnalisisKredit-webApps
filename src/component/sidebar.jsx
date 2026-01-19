@@ -4,19 +4,17 @@ import {
   FaSignOutAlt,
   FaUserShield,
   FaBars,
+  FaCalculator,
   FaDatabase,
-  FaChevronDown,
-  FaChevronUp,
-  FaUser,
-  FaBriefcase,
-  FaLandmark,
 } from "react-icons/fa";
 import { useNavigate, useLocation } from "react-router-dom";
 import Swal from "sweetalert2";
+import { jwtDecode } from "jwt-decode";
 
 export default function Sidebar() {
   const [isOpen, setIsOpen] = useState(false);
   const [openMasterData, setOpenMasterData] = useState(false);
+  const [userRole, setUserRole] = useState("");
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -29,7 +27,28 @@ export default function Sidebar() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  useEffect(() => {
+    const token = localStorage.getItem("accessToken");
+    if (!token) return;
+    try {
+      const decoded = jwtDecode(token);
+      const role =
+        decoded?.role ||
+        decoded?.user?.role ||
+        decoded?.jabatan ||
+        decoded?.level ||
+        "";
+      setUserRole(String(role).toLowerCase());
+    } catch {
+      setUserRole("");
+    }
+  }, []);
+
   const isActive = (path) => location.pathname === path;
+  const isSuperadmin = userRole === "superadmin";
+  const dashboardPath = isSuperadmin
+    ? "/dashboard-monitoring-users"
+    : "/dashboard";
 
   const menuClass = (path) =>
     `flex items-center gap-3 px-4 py-2 mx-3 rounded-md cursor-pointer transition
@@ -39,13 +58,6 @@ export default function Sidebar() {
         : "text-gray-300 hover:bg-gray-800"
     }`;
 
-  const subMenuClass = (path) =>
-    `flex items-center gap-3 px-8 py-2 mx-3 rounded-md cursor-pointer transition text-sm
-    ${
-      isActive(path)
-        ? "bg-indigo-500 text-white"
-        : "text-gray-400 hover:bg-gray-800"
-    }`;
 
   const handleLogout = async () => {
     const result = await Swal.fire({
@@ -92,61 +104,47 @@ export default function Sidebar() {
           <span className="ml-2 font-bold text-gray-100">Account Officer</span>
         </div>
 
-        {/* MENU */}
-        <nav className="mt-4 space-y-1">
-          {/* DASHBOARD */}
+      {/* MENU */}
+      <nav className="mt-4 space-y-1">
+        {/* DASHBOARD */}
+        <div
+          className={menuClass(dashboardPath)}
+          onClick={() => {
+            navigate(dashboardPath);
+            setIsOpen(false);
+          }}
+        >
+          <FaTachometerAlt />
+          <span>Dashboard</span>
+        </div>
+
+        {/* NO Permohonan */}
+        {userRole !== "komitecabang" && !isSuperadmin ? (
           <div
-            className={menuClass("/dashboard")}
+            className={menuClass("/generate/no-permohonan")}
             onClick={() => {
-              navigate("/dashboard");
+              navigate("/generate/no-permohonan");
               setIsOpen(false);
             }}
           >
-            <FaTachometerAlt />
-            <span>Dashboard</span>
+            <FaDatabase />
+            <span>Permohonan</span>
           </div>
+        ) : null}
 
-          {/* MASTER DATA */}
-          <div
-            className="flex items-center justify-between px-4 py-2 mx-3 rounded-md cursor-pointer
-            text-gray-300 hover:bg-gray-800 transition"
-            onClick={() => setOpenMasterData(!openMasterData)}
-          >
-            <div className="flex items-center gap-3">
-              <FaDatabase />
-              <span>Master Data</span>
+           {/* KALKULATOR */}
+          {!isSuperadmin ? (
+            <div
+              className={menuClass("/kalkulator")}
+              onClick={() => {
+                navigate("/kalkulator");
+                setIsOpen(false);
+              }}
+            >
+              <FaCalculator />
+              <span>Kalkulator</span>
             </div>
-            {openMasterData ? <FaChevronUp /> : <FaChevronDown />}
-          </div>
-
-          {/* SUB MENU */}
-          {openMasterData && (
-            <>
-              <div
-                className={subMenuClass("/master-data/data-diri")}
-                onClick={() => navigate("/master-data/data-diri")}
-              >
-                <FaUser />
-                <span>Data Diri</span>
-              </div>
-
-              <div
-                className={subMenuClass("/master-data/data-usaha")}
-                onClick={() => navigate("/master-data/data-usaha")}
-              >
-                <FaBriefcase />
-                <span>Data Usaha</span>
-              </div>
-
-              <div
-                className={subMenuClass("/master-data/data-jaminan")}
-                onClick={() => navigate("/master-data/data-jaminan")}
-              >
-                <FaLandmark />
-                <span>Data Jaminan</span>
-              </div>
-            </>
-          )}
+          ) : null}
 
           {/* LOGOUT */}
           <div
