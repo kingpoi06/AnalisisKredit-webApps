@@ -105,6 +105,10 @@ const Select = ({ label, value, onChange, options = [] }) => (
 
 const UploadButton = ({ label, file, onChange }) => {
   const inputRef = useRef(null);
+  const fileLabel =
+    typeof file === "string"
+      ? file.split("/").pop()
+      : file?.name || "Belum ada foto";
 
   return (
     <div className="space-y-1">
@@ -130,9 +134,7 @@ const UploadButton = ({ label, file, onChange }) => {
         Open Camera
       </button>
 
-      <div className="text-[11px] text-slate-500">
-        {file ? file.name : "Belum ada foto"}
-      </div>
+      <div className="text-[11px] text-slate-500">{fileLabel}</div>
     </div>
   );
 };
@@ -235,11 +237,139 @@ const formatIdInteger = (value) => {
   }).format(numericValue);
 };
 
+const resolveOptionValue = (value, options) => {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) return { value: "", other: "" };
+  if (options.includes(trimmed)) return { value: trimmed, other: "" };
+  return { value: "Lainnya", other: trimmed };
+};
+
+const normalizeDataInstansi = (data) => {
+  const statusResolved = resolveOptionValue(
+    getFieldValue(data, [
+      "statusInstansi",
+      "status_instansi",
+      "statusPerusahaan",
+      "status_perusahaan",
+      "statusPekerjaan",
+      "status_pekerjaan",
+    ]),
+    STATUS_INSTANSI_OPTIONS
+  );
+  const bidangResolved = resolveOptionValue(
+    getFieldValue(data, [
+      "bidangInstansi",
+      "bidang_instansi",
+      "bidangUsaha",
+      "bidang_usaha",
+      "bidangPerusahaan",
+      "bidang_perusahaan",
+    ]),
+    BIDANG_INSTANSI_OPTIONS
+  );
+  const pangkatResolved = resolveOptionValue(
+    getFieldValue(data, [
+      "pangkatGolongan",
+      "pangkat_golongan",
+      "golongan",
+      "pangkat",
+    ]),
+    GOLONGAN_OPTIONS
+  );
+
+  const normalized = {
+    namaInstansi: getFieldValue(data, [
+      "namaInstansi",
+      "nama_instansi",
+      "instansi",
+      "namaTempatKerja",
+      "nama_tempat_kerja",
+      "namaPerusahaan",
+      "nama_perusahaan",
+    ]),
+    statusInstansi: statusResolved.value,
+    statusInstansiOther: statusResolved.other,
+    bidangInstansi: bidangResolved.value,
+    bidangInstansiOther: bidangResolved.other,
+    alamatInstansi: getFieldValue(data, [
+      "alamatInstansi",
+      "alamat_instansi",
+      "alamatPerusahaan",
+      "alamat_perusahaan",
+      "alamatTempatKerja",
+      "alamat_tempat_kerja",
+      "alamat",
+    ]),
+    namaAtasan: getFieldValue(data, ["namaAtasan", "nama_atasan"]),
+    namaBendahara: getFieldValue(data, ["namaBendahara", "nama_bendahara"]),
+    nomorHP: getFieldValue(data, ["nomorHP", "nomor_hp", "noHP", "nohp"]),
+    jabatanDebitur: getFieldValue(data, [
+      "jabatanDebitur",
+      "jabatan_debitur",
+      "jabatan",
+      "jabatanKerja",
+      "jabatan_kerja",
+    ]),
+    pangkatGolongan: pangkatResolved.value,
+    pangkatGolonganOther: pangkatResolved.other,
+    statusPegawai: getFieldValue(data, [
+      "statusPegawai",
+      "status_pegawai",
+      "statusKaryawan",
+      "status_karyawan",
+      "statusPekerjaan",
+      "status_pekerjaan",
+    ]),
+    nipNik: getFieldValue(data, ["nipNik", "nip_nik", "nip", "nik"]),
+    npwp: getFieldValue(data, ["npwp", "NPWP", "npwpInstansi", "npwp_instansi"]),
+    plafonDiajukan: getFieldValue(data, [
+      "plafonDiajukan",
+      "plafon_diajukan",
+      "plafonPermohonan",
+      "plafon_permohonan",
+      "plafon",
+      "plafonPinjaman",
+      "plafon_pinjaman",
+    ]),
+    bekerjaSejak: getFieldValue(data, [
+      "bekerjaSejak",
+      "bekerja_sejak",
+      "mulaiBekerja",
+      "mulai_bekerja",
+      "tanggalBekerja",
+      "tanggal_bekerja",
+    ]),
+    uploadSKTerakhir: getFieldValue(data, [
+      "uploadSKTerakhir",
+      "upload_sk_terakhir",
+      "skTerakhir",
+      "sk_terakhir",
+      "fotoSKTerakhir",
+      "foto_sk_terakhir",
+    ]),
+    uploadNPWP: getFieldValue(data, [
+      "uploadNPWP",
+      "upload_npwp",
+      "fotoNPWP",
+      "foto_npwp",
+      "npwpFile",
+      "npwp_file",
+    ]),
+  };
+
+  return Object.entries(normalized).reduce((acc, [key, value]) => {
+    if (value !== "" && value !== null && value !== undefined) {
+      acc[key] = value;
+    }
+    return acc;
+  }, {});
+};
+
 /* =======================
    PAGE
 ======================= */
 
-export default function DataInstansi() {
+export default function UpdateDataInstansi() {
 
 const navigate = useNavigate();
 const { no_permohonan } = useParams();
@@ -283,26 +413,42 @@ const shouldShowNpwp = toNumber(formData.plafonDiajukan) > 100000000;
           response.data?.Data ?? response.data?.data ?? response.data ?? {};
         const data = Array.isArray(payload) ? payload[0] : payload;
         const nikValue = getFieldValue(data, ["nik", "NIK"]);
-        const nomorHpValue = getFieldValue(data, [
-          "kontakPribadi",
-          "kontak_pribadi",
-          "noHP",
-          "nohp",
-          "nomorHP",
-          "nomor_hp",
-        ]);
         if (!nikValue || !isActive) return;
-        setFormData((prev) => ({
-          ...prev,
-          nipNik: prev.nipNik || nikValue,
-          nomorHP: prev.nomorHP || nomorHpValue,
-        }));
+        setFormData((prev) =>
+          prev.nipNik ? prev : { ...prev, nipNik: nikValue }
+        );
       } catch {
         if (!isActive) return;
       }
     };
 
     fetchDataDiri();
+    return () => {
+      isActive = false;
+    };
+  }, [no_permohonan]);
+
+  useEffect(() => {
+    if (!no_permohonan) return;
+
+    let isActive = true;
+    const fetchDataInstansi = async () => {
+      try {
+        const response = await axios.get(
+          API_ENDPOINTS.datanasabah.dataInstansi.detail(no_permohonan)
+        );
+        const payload =
+          response.data?.Data ?? response.data?.data ?? response.data ?? {};
+        const data = Array.isArray(payload) ? payload[0] : payload;
+        if (!data || !isActive) return;
+        const normalized = normalizeDataInstansi(data);
+        setFormData((prev) => ({ ...prev, ...normalized }));
+      } catch {
+        if (!isActive) return;
+      }
+    };
+
+    fetchDataInstansi();
     return () => {
       isActive = false;
     };
@@ -437,7 +583,7 @@ const handleSave = async () => {
     const plafonValue = toNumber(formData.plafonDiajukan);
     const nextPath =
       plafonValue > 40000000
-        ? `/master-data/data-jaminan/${encodeURIComponent(no_permohonan)}`
+        ? `/update-data/data-jaminan/${encodeURIComponent(no_permohonan)}`
         : "/dashboard";
     navigate(nextPath);
 

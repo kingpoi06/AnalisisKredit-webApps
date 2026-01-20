@@ -157,6 +157,13 @@ const resolveJenisKreditLabel = (value) => {
   return normalized;
 };
 
+const isKreditKonsumtifPegawai = (value) => {
+  if (!value) return false;
+  const normalized = String(value).toLowerCase();
+  if (normalized.includes("kredit konsumtif")) return true;
+  return /\b123\b/.test(normalized);
+};
+
 const normalizeList = (data) => {
   if (!Array.isArray(data)) return data ? [data] : [];
   return Array.isArray(data[0]) ? data.flat() : data;
@@ -192,8 +199,22 @@ const normalizeDataPermohonan = (data) => ({
   plafonPermohonan: getFieldValue(data, ["plafonPermohonan", "plafon_permohonan"]),
   jangkaWaktuKredit: getFieldValue(data, ["jangkaWaktuKredit", "jangka_waktu_kredit"]),
   sukuBungaTahun: getFieldValue(data, ["sukuBungaTahun", "suku_bunga_tahun"]),
-  sukuBungaBulan: getFieldValue(data, ["sukuBungaBulan", "suku_bunga_bulan"]),
-  perhitunganBunga: getFieldValue(data, ["perhitunganBunga", "perhitungan_bunga"]),
+  sukuBungaBulan: getFieldValue(data, [
+    "sukuBungaBulan",
+    "suku_bunga_bulan",
+    "sukuBungaPerBulan",
+    "suku_bunga_per_bulan",
+    "sukuBungaBulanan",
+    "suku_bunga_bulanan",
+  ]),
+  perhitunganBunga: getFieldValue(data, [
+    "perhitunganBunga",
+    "perhitungan_bunga",
+    "jenisPerhitungan",
+    "jenis_perhitungan",
+    "caraPerhitungan",
+    "cara_perhitungan",
+  ]),
   sumberPengembalian: getFieldValue(data, ["sumberPengembalian", "sumber_pengembalian"]),
   caraAngsuranKredit: getFieldValue(data, ["caraAngsuranKredit", "cara_angsuran_kredit"]),
   keteranganUmum: getFieldValue(data, ["keteranganUmum", "keterangan_umum"]),
@@ -218,6 +239,7 @@ const [loadingNoPermohonan, setLoadingNoPermohonan] = useState(false);
     const computedSukuBunga = computeSukuBungaBulan(formData);
 
     setFormData((prev) => {
+      if (!computedSukuBunga) return prev;
       if (prev.sukuBungaBulan === computedSukuBunga) return prev;
       return { ...prev, sukuBungaBulan: computedSukuBunga };
     });
@@ -227,6 +249,7 @@ const [loadingNoPermohonan, setLoadingNoPermohonan] = useState(false);
   ]);
 
   useEffect(() => {
+    if (formData.perhitunganBunga) return;
     if (formData.sukuBungaTahun === "") return;
     const rate = toNumber(formData.sukuBungaTahun);
     if (!Number.isFinite(rate) || rate <= 0) return;
@@ -422,7 +445,15 @@ const handleSave = async () => {
     Swal.fire("Berhasil", "Data Permohonan Kredit berhasil diperbaharui", "success");
 
     // ⬇️ lanjut ke jaminan (pakai nik yg sama)
-    navigate(`/update-data/data-usaha/${encodeURIComponent(requestNoPermohonan)}`);
+    if (isKreditKonsumtifPegawai(formData.jenisKredit)) {
+      navigate(
+        `/update-data/data-instansi/${encodeURIComponent(requestNoPermohonan)}`
+      );
+    } else {
+      navigate(
+        `/update-data/data-usaha/${encodeURIComponent(requestNoPermohonan)}`
+      );
+    }
 
   } catch (err) {
     Swal.fire(

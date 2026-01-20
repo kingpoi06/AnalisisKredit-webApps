@@ -96,17 +96,27 @@ const initialFormData = {
   sumberPengembalian: "",
   caraAngsuranKredit: "",
   keteranganUmum: "",
+  jenisNasabah: "",
   character: "",
   statusKepemilikanTempatTinggal: "",
   lamaTinggalAlamatSaatIni: "",
   frekuensiPindahRumah: "",
   kepatuhanProsesAnalisaKredit: "",
+  tunggakanKewajibanRutinNonKredit: "",
   sumberModalAwalUsaha: "",
   buktiKeterlibatanModalSendiri: "",
   asetProduktifPribadi: "",
+  danaDaruratCalonDebitur: "",
+  konsistensiSaldoRekening: "",
+  cadanganKasOperasionalUsaha: "",
+  rekeningKhususOperasionalUsaha: "",
   lamaUsahaBidangSama: "",
   statusLokasiUsaha: "",
   ketergantunganTerhadapMusim: "",
+  risikoPHKPekerjaan: "",
+  penghasilanAlternatifBerkelanjutan: "",
+  stabilitasOmzetUsaha: "",
+  ketergantunganPelangganUtama: "",
   statusAgunan: "",
   capital1: "",
   capital2: "",
@@ -173,6 +183,7 @@ const createEmptyJaminan = () => ({
   jenisjaminan: "",
   statusPengikatan: "",
   statusAgunan: "",
+  statusHubBankLain: "",
   plafonDiajukan: "",
   rerataNilaiPasar: "",
   nilaiNJOP: "",
@@ -1503,19 +1514,34 @@ const isKreditKonsumtifPegawai = (value) => {
   return /\b123\b/.test(normalized);
 };
 
+const isKreditModalKerjaType = (value) => {
+  if (!value) return false;
+  const normalized = String(value).toLowerCase();
+  if (normalized.includes("kredit modal kerja")) return true;
+  return /\b121\b/.test(normalized);
+};
+
+const normalizePerhitunganBunga = (value) => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "flat") return "Flat";
+  if (normalized === "anuitas") return "Anuitas";
+  return "";
+};
+
 const computeSukuBungaBulan = ({ sukuBungaTahun, perhitunganBunga }) => {
-  if (sukuBungaTahun === "" || perhitunganBunga === "") {
+  const resolvedPerhitungan = normalizePerhitunganBunga(perhitunganBunga);
+  if (sukuBungaTahun === "" || resolvedPerhitungan === "") {
     return "";
   }
 
   const annualRate = toNumber(sukuBungaTahun) / 100;
   if (annualRate <= 0) return "";
 
-  if (perhitunganBunga === "Flat") {
+  if (resolvedPerhitungan === "Flat") {
     return String(((annualRate / 12) * 100).toFixed(2));
   }
 
-  if (perhitunganBunga === "Anuitas") {
+  if (resolvedPerhitungan === "Anuitas") {
     const monthlyRate = Math.pow(1 + annualRate, 1 / 12) - 1;
     return String((monthlyRate * 100).toFixed(2));
   }
@@ -1556,23 +1582,22 @@ const computeTotalPenghasilanKonsumtif = (
   pendapatanPemohonKredit,
   pendapatanIstriSuami,
   pendapatanTambahan,
-  pendapatanLainnya
+  pendapatanLainnya,
+  biayaHutangKewajibanLain
 ) => {
-  if (
-    pendapatanPemohonKredit === "" &&
-    pendapatanIstriSuami === "" &&
-    pendapatanTambahan === "" &&
-    pendapatanLainnya === ""
-  ) {
-    return "";
-  }
+  const hasAnyIncome =
+    pendapatanPemohonKredit !== "" ||
+    pendapatanIstriSuami !== "" ||
+    pendapatanTambahan !== "" ||
+    pendapatanLainnya !== "";
+  if (!hasAnyIncome) return "";
 
-  return String(
-    toNumber(pendapatanPemohonKredit) +
-      toNumber(pendapatanIstriSuami) +
-      toNumber(pendapatanTambahan) +
-      toNumber(pendapatanLainnya)
-  );
+  const tpp = toNumber(pendapatanTambahan);
+  if (!tpp) return "0";
+
+  const angsuranBankLain = toNumber(biayaHutangKewajibanLain);
+  const remainingTpp = Math.max(tpp - angsuranBankLain, 0);
+  return String(remainingTpp * 0.8);
 };
 
 const computeBiayaNonOperasionalKonsumtif = (
@@ -1664,16 +1689,19 @@ const computeLabaNettoNonOperasional = (
 };
 
 const computeTotalLabaKonsumtif = (
-  totalPenghasilan,
-  biayaNonOperasional,
-  biayaHutangKewajibanLain
+  pendapatanPemohonKredit,
+  pendapatanIstriSuami,
+  pendapatanLainnya,
+  maksimumAngsuran,
+  biayaNonOperasional
 ) => {
-  if (totalPenghasilan === "") return "";
-  return formatTwoDecimals(
-    toNumber(totalPenghasilan) -
-      toNumber(biayaNonOperasional) -
-      toNumber(biayaHutangKewajibanLain)
-  );
+  const totalPendapatan =
+    toNumber(pendapatanPemohonKredit) +
+    toNumber(pendapatanIstriSuami) +
+    toNumber(pendapatanLainnya) +
+    toNumber(maksimumAngsuran);
+  if (!totalPendapatan) return "";
+  return formatTwoDecimals(totalPendapatan - toNumber(biayaNonOperasional));
 };
 
 const computeKemampuanMembayarSetelahPembiayaan = (
@@ -1796,15 +1824,23 @@ const [slikEntries, setSlikEntries] = useState([]);
 const [jaminanList, setJaminanList] = useState([]);
 
   const isKreditKonsumtif = isKreditKonsumtifPegawai(formData.jenisKredit);
+  const isKreditModalKerja = isKreditModalKerjaType(formData.jenisKredit);
   const slikSummary = computeSlikSummary(slikEntries);
   const hasSlikFromJaminan = slikEntries.some((entry) => {
     const hasData = entry.fileName || entry.table?.rows?.length;
     return hasData && entry.source !== "analisis";
   });
-  const shouldShowSlikUpload = !hasSlikFromJaminan;
+  const hubunganBankLainValue = String(formData.jenisNasabah ?? "").trim();
+  const isHubunganBankLainAda =
+    hubunganBankLainValue.toLowerCase() === "ada";
+  const shouldShowSlikUpload = isHubunganBankLainAda && !hasSlikFromJaminan;
   const analisisSlikEntry = slikEntries.find(
     (entry) => entry.source === "analisis"
   );
+  const hasSlikRows = slikEntries.some(
+    (entry) => entry.table?.rows?.length
+  );
+  const hasSlikUpload = Boolean(analisisSlikEntry?.fileName);
   const handleGenerateSlikNarrative = () => {
     const narrative = buildSlikNarrative(slikSummary);
     if (!narrative) return;
@@ -1815,17 +1851,52 @@ const [jaminanList, setJaminanList] = useState([]);
     formData.lamaTinggalAlamatSaatIni,
     formData.frekuensiPindahRumah,
     formData.kepatuhanProsesAnalisaKredit,
+    ...(isKreditModalKerja || isKreditKonsumtif
+      ? [formData.tunggakanKewajibanRutinNonKredit]
+      : []),
   ];
-  const modalValues = [
-    formData.sumberModalAwalUsaha,
-    formData.buktiKeterlibatanModalSendiri,
-    formData.asetProduktifPribadi,
-  ];
-  const capacityValues = [
-    formData.lamaUsahaBidangSama,
-    formData.statusLokasiUsaha,
-    formData.ketergantunganTerhadapMusim,
-  ];
+  const modalValues = isKreditModalKerja
+    ? [
+        formData.lamaUsahaBidangSama,
+        formData.statusLokasiUsaha,
+        formData.ketergantunganTerhadapMusim,
+        formData.stabilitasOmzetUsaha,
+        formData.ketergantunganPelangganUtama,
+      ]
+    : isKreditKonsumtif
+    ? [
+        formData.sumberModalAwalUsaha,
+        formData.buktiKeterlibatanModalSendiri,
+        formData.asetProduktifPribadi,
+        formData.danaDaruratCalonDebitur,
+        formData.konsistensiSaldoRekening,
+      ]
+    : [
+        formData.sumberModalAwalUsaha,
+        formData.buktiKeterlibatanModalSendiri,
+        formData.asetProduktifPribadi,
+      ];
+  const capacityValues = isKreditModalKerja
+    ? [
+        formData.sumberModalAwalUsaha,
+        formData.buktiKeterlibatanModalSendiri,
+        formData.asetProduktifPribadi,
+        formData.cadanganKasOperasionalUsaha,
+        formData.rekeningKhususOperasionalUsaha,
+      ]
+    : isKreditKonsumtif
+    ? [
+        formData.lamaUsahaBidangSama,
+        formData.statusLokasiUsaha,
+        formData.ketergantunganTerhadapMusim,
+        formData.risikoPHKPekerjaan,
+        formData.penghasilanAlternatifBerkelanjutan,
+      ]
+    : [
+        formData.lamaUsahaBidangSama,
+        formData.statusLokasiUsaha,
+        formData.ketergantunganTerhadapMusim,
+      ];
   const characterScoreAverage = computeAverage(characterValues, 4);
   const characterStatusScore =
     characterScoreAverage === null
@@ -1887,7 +1958,9 @@ const [jaminanList, setJaminanList] = useState([]);
   const rpcStatusLabel = String(formData.repaymentCapacityStatus ?? "").trim();
   const rpcScore = rpcStatusLabel.toLowerCase() === "approve" ? 40 : 0;
   const slikGradeLabel = String(slikSummary.gradeLabel ?? "").trim();
-  const slikScore = SLIK_GRADE_SCORE_MAP[slikGradeLabel] ?? 0;
+  const slikScore = isHubunganBankLainAda
+    ? SLIK_GRADE_SCORE_MAP[slikGradeLabel] ?? 0
+    : 30;
   const totalBobotScore =
     agunanScore + totalStatusScore + rpcScore + slikScore;
   const agunanScoreLabel = formatPercent(agunanScore);
@@ -1996,6 +2069,30 @@ const [jaminanList, setJaminanList] = useState([]);
     formData.perhitunganBunga,
   ]);
 
+  useEffect(() => {
+    const normalized = normalizePerhitunganBunga(formData.perhitunganBunga);
+    if (normalized && normalized !== formData.perhitunganBunga) {
+      setFormData((prev) => ({
+        ...prev,
+        perhitunganBunga: normalized,
+      }));
+      return;
+    }
+
+    if (formData.sukuBungaTahun === "") return;
+    const rate = toNumber(formData.sukuBungaTahun);
+    if (!Number.isFinite(rate) || rate <= 0) return;
+
+    const inferred = rate >= 18 ? "Anuitas" : "Flat";
+    setFormData((prev) => {
+      if (normalizePerhitunganBunga(prev.perhitunganBunga)) return prev;
+      return { ...prev, perhitunganBunga: inferred };
+    });
+  }, [
+    formData.perhitunganBunga,
+    formData.sukuBungaTahun,
+  ]);
+
 
   useEffect(() => {
     const computedOmset = computeOmsetPerbulan(
@@ -2053,7 +2150,8 @@ const [jaminanList, setJaminanList] = useState([]);
       formData.pendapatanPemohonKredit,
       formData.pendapatanIstriSuami,
       formData.pendapatanTambahan,
-      formData.pendapatanLainnya
+      formData.pendapatanLainnya,
+      formData.biayaHutangKewajibanLain
     );
     const computedBiayaNonOperasional = computeBiayaNonOperasionalKonsumtif(
       formData.biayaAnakSekolah,
@@ -2133,6 +2231,7 @@ const [jaminanList, setJaminanList] = useState([]);
     formData.biayaKonsumsi,
     formData.biayaListrikAirTelepon,
     formData.biayaLainnyaNonOperasional,
+    formData.biayaHutangKewajibanLain,
     formData.biayaOperasional,
     formData.ketBiayaOperasional,
     formData.omsetPerhari,
@@ -2202,9 +2301,11 @@ const [jaminanList, setJaminanList] = useState([]);
     );
     const computedLabaNettoNonOperasional = isKreditKonsumtif
       ? computeTotalLabaKonsumtif(
+          formData.pendapatanPemohonKredit,
+          formData.pendapatanIstriSuami,
+          formData.pendapatanLainnya,
           formData.totalPenghasilan,
-          formData.biayaNonOperasional,
-          formData.biayaHutangKewajibanLain
+          formData.biayaNonOperasional
         )
       : computeLabaNettoNonOperasional(
           computedLabaNettoLainnya,
@@ -2266,6 +2367,8 @@ const [jaminanList, setJaminanList] = useState([]);
     formData.labaNetto,
     formData.pendapatanLainnya,
     formData.totalPenghasilan,
+    formData.pendapatanPemohonKredit,
+    formData.pendapatanIstriSuami,
     formData.biayaNonOperasional,
     formData.biayaHutangKewajibanLain,
     formData.angsuranPembiayaan,
@@ -2493,6 +2596,24 @@ const fetchDataPermohonan = async (requestNo) => {
     }
     setSlikEntries(readSlikStorageEntries(requestNo));
   }, [noPermohonanParam, noPermohonan]);
+
+  useEffect(() => {
+    if (!jaminanList.length) return;
+    const hasYa = jaminanList.some(
+      (item) =>
+        String(item?.statusHubBankLain ?? "").trim().toLowerCase() === "ya"
+    );
+    const hasTidak = jaminanList.some(
+      (item) =>
+        String(item?.statusHubBankLain ?? "").trim().toLowerCase() === "tidak"
+    );
+    const nextValue = hasYa ? "Ada" : hasTidak ? "Tidak Ada" : "";
+    if (!nextValue) return;
+    setFormData((prev) => {
+      if (prev.jenisNasabah === nextValue) return prev;
+      return { ...prev, jenisNasabah: nextValue };
+    });
+  }, [jaminanList]);
 
 const handleFieldChange = (field) => (event) => {
   setFormData((prev) => ({
@@ -2840,6 +2961,20 @@ const handleSave = async () => {
             <Card title="WATAK / KARAKTER (Character)" icon={<FaMapMarkerAlt />}>
               <div className="space-y-4">
                 {renderSlikSummaryTable(slikEntries)}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <Select
+                    label="Hubungan Nasabah Dengan Bank Lain"
+                    value={formData.jenisNasabah}
+                    onChange={handleFieldChange("jenisNasabah")}
+                  >
+                    <option value="">Pilih Hubungan</option>
+                    <option value="Ada">Ada</option>
+                    <option value="Tidak Ada">Tidak Ada</option>
+                  </Select>
+                  <p className="text-[11px] text-slate-500 md:col-span-2">
+                    Otomatis terisi dari Data Jaminan (Hubungan dengan Bank Lain).
+                  </p>
+                </div>
                 {shouldShowSlikUpload ? (
                   <div className="space-y-2">
                     <Input
@@ -2853,29 +2988,31 @@ const handleSave = async () => {
                     </div>
                   </div>
                 ) : null}
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[11px] font-semibold text-gray-500">
-                      Keterangan SLIK
-                    </label>
-                    <button
-                      type="button"
-                      onClick={handleGenerateSlikNarrative}
-                      className="rounded-full border border-slate-200 px-3 py-1 text-[11px] font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
-                    >
-                      Generate Narasi
-                    </button>
+                {isHubunganBankLainAda ? (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-semibold text-gray-500">
+                        Keterangan SLIK
+                      </label>
+                      <button
+                        type="button"
+                        onClick={handleGenerateSlikNarrative}
+                        className="rounded-full border border-slate-200 px-3 py-1 text-[11px] font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
+                      >
+                        Generate Narasi
+                      </button>
+                    </div>
+                    <textarea
+                      rows="4"
+                      value={formData.character}
+                      onChange={handleFieldChange("character")}
+                      placeholder="Masukkan keterangan SLIK..."
+                      className="mt-1 w-full rounded-md border border-gray-200
+                      px-3 py-2 text-xs shadow-sm text-gray-700
+                      focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none"
+                    />
                   </div>
-                  <textarea
-                    rows="4"
-                    value={formData.character}
-                    onChange={handleFieldChange("character")}
-                    placeholder="Masukkan keterangan SLIK..."
-                    className="mt-1 w-full rounded-md border border-gray-200
-                    px-3 py-2 text-xs shadow-sm text-gray-700
-                    focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none"
-                  />
-                </div>
+                ) : null}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div className="space-y-2">
                     <Select
@@ -2945,6 +3082,26 @@ const handleSave = async () => {
                       }
                     </p>
                   </div>
+                  {isKreditModalKerja || isKreditKonsumtif ? (
+                    <div className="space-y-2">
+                      <Select
+                        label="Pernah menunggak kewajiban rutin non-kredit?"
+                        value={formData.tunggakanKewajibanRutinNonKredit}
+                        onChange={handleFieldChange(
+                          "tunggakanKewajibanRutinNonKredit"
+                        )}
+                      >
+                        <option value="">Pilih Kondisi</option>
+                        <option value="4">Tidak pernah</option>
+                        <option value="3">Jarang</option>
+                        <option value="2">Pernah</option>
+                        <option value="1">Sering</option>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Bukti pembayaran tagihan, konfirmasi RT, wawancara.
+                      </p>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </Card>
@@ -2959,14 +3116,18 @@ const handleSave = async () => {
                         onChange={handleFieldChange("sumberModalAwalUsaha")}
                       >
                         <option value="">Pilih Sumber Pembayaran</option>
-                        <option value="4">Gaji</option>
-                        <option value="3">Tunjangan Tetap (TPP,Sertifikasi,Jaspel)</option>
-                        <option value="1">Penghasilan lainnya tidak tetap</option>
+                        <option value="4">Gaji tetap</option>
+                        <option value="3">Gaji + tambahan</option>
+                        <option value="2">Penghasilan tidak tetap</option>
+                        <option value="1">Tidak jelas</option>
                       </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Slip gaji, surat keterangan kerja, mutasi rekening.
+                      </p>
                     </div>
                     <div className="space-y-2">
                       <Select
-                        label="Apakah calon debitur memiliki tabungan/aset likuid pribadi di luar kebutuhan rutin?"
+                        label="Apakah calon debitur memiliki tabungan atau aset likuid pribadi?"
                         value={formData.buktiKeterlibatanModalSendiri}
                         onChange={handleFieldChange(
                           "buktiKeterlibatanModalSendiri"
@@ -2978,10 +3139,13 @@ const handleSave = async () => {
                         <option value="2">Sangat terbatas</option>
                         <option value="1">Tidak ada</option>
                       </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Saldo tabungan, mutasi rekening, bukti simpanan.
+                      </p>
                     </div>
                     <div className="space-y-2">
                       <Select
-                        label="Bagaimana perbandingan total kewajiban bulanan terhadap penghasilan bulanan?"
+                        label="Berapa rasio total kewajiban bulanan terhadap penghasilan bulanan?"
                         value={formData.asetProduktifPribadi}
                         onChange={handleFieldChange("asetProduktifPribadi")}
                       >
@@ -2991,6 +3155,126 @@ const handleSave = async () => {
                         <option value="2">{">40-50%"}</option>
                         <option value="1">{">50%"}</option>
                       </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Perhitungan RC, daftar kewajiban, slip gaji.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Select
+                        label="Apakah calon debitur memiliki dana darurat (>=3x pengeluaran bulanan)?"
+                        value={formData.danaDaruratCalonDebitur}
+                        onChange={handleFieldChange("danaDaruratCalonDebitur")}
+                      >
+                        <option value="">Pilih Kondisi</option>
+                        <option value="4">Ada >=3x</option>
+                        <option value="3">{"Ada <3x"}</option>
+                        <option value="2">Sangat terbatas</option>
+                        <option value="1">Tidak ada</option>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Saldo rekening, tabungan terpisah, estimasi biaya hidup.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Select
+                        label="Seberapa konsisten saldo rekening calon debitur dalam 6 bulan terakhir?"
+                        value={formData.konsistensiSaldoRekening}
+                        onChange={handleFieldChange("konsistensiSaldoRekening")}
+                      >
+                        <option value="">Pilih Konsistensi</option>
+                        <option value="4">Stabil naik</option>
+                        <option value="3">Relatif stabil</option>
+                        <option value="2">Fluktuatif</option>
+                        <option value="1">Sering kosong</option>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Mutasi rekening 6 bulan terakhir.
+                      </p>
+                    </div>
+                  </>
+                ) : isKreditModalKerja ? (
+                  <>
+                    <div className="space-y-2">
+                      <Select
+                        label="Lama usaha di bidang yang sama"
+                        value={formData.lamaUsahaBidangSama}
+                        onChange={handleFieldChange("lamaUsahaBidangSama")}
+                      >
+                        <option value="">Pilih Lama Usaha</option>
+                        <option value="4">{">=5 th"}</option>
+                        <option value="3">{"3-<5 th"}</option>
+                        <option value="2">{"1-<3 th"}</option>
+                        <option value="1">{"<1 th"}</option>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Riwayat usaha, izin usaha, observasi kontinuitas.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Select
+                        label="Status lokasi usaha"
+                        value={formData.statusLokasiUsaha}
+                        onChange={handleFieldChange("statusLokasiUsaha")}
+                      >
+                        <option value="">Pilih Status Lokasi</option>
+                        <option value="4">Milik sendiri</option>
+                        <option value="3">Sewa >=3 th</option>
+                        <option value="2">{"Sewa <3 th"}</option>
+                        <option value="1">Tidak tetap</option>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Sertifikat/akta sewa, observasi lokasi.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Select
+                        label="Ketergantungan usaha terhadap musim"
+                        value={formData.ketergantunganTerhadapMusim}
+                        onChange={handleFieldChange("ketergantunganTerhadapMusim")}
+                      >
+                        <option value="">Pilih Ketergantungan</option>
+                        <option value="4">Tidak</option>
+                        <option value="3">Ringan</option>
+                        <option value="2">Sedang</option>
+                        <option value="1">Tinggi</option>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Pola penjualan bulanan & jenis usaha.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Select
+                        label="Stabilitas omzet usaha"
+                        value={formData.stabilitasOmzetUsaha}
+                        onChange={handleFieldChange("stabilitasOmzetUsaha")}
+                      >
+                        <option value="">Pilih Stabilitas</option>
+                        <option value="4">Stabil</option>
+                        <option value="3">Fluktuasi ringan</option>
+                        <option value="2">Fluktuasi sedang</option>
+                        <option value="1">Tidak stabil</option>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Rekap omzet 6-12 bulan, mutasi rekening.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Select
+                        label="Ketergantungan usaha pada pelanggan utama"
+                        value={formData.ketergantunganPelangganUtama}
+                        onChange={handleFieldChange(
+                          "ketergantunganPelangganUtama"
+                        )}
+                      >
+                        <option value="">Pilih Ketergantungan</option>
+                        <option value="4">Tidak tergantung</option>
+                        <option value="3">Ringan</option>
+                        <option value="2">Sedang</option>
+                        <option value="1">Tinggi</option>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Proporsi omzet pelanggan utama & observasi transaksi.
+                      </p>
                     </div>
                   </>
                 ) : (
@@ -3119,7 +3403,7 @@ const handleSave = async () => {
                   <>
                     <div className="space-y-2">
                       <Select
-                        label="Sudah berapa lama calon debitur bekerja pada pekerjaan/instansi saat ini?"
+                        label="Sudah berapa lama calon debitur bekerja pada instansi/pekerjaan saat ini?"
                         value={formData.lamaUsahaBidangSama}
                         onChange={handleFieldChange("lamaUsahaBidangSama")}
                       >
@@ -3129,32 +3413,164 @@ const handleSave = async () => {
                         <option value="2">{"1-<3 th"}</option>
                         <option value="1">{"<1 th"}</option>
                       </Select>
+                      <p className="text-[11px] text-slate-500">
+                        SK kerja, surat keterangan kerja, riwayat pekerjaan.
+                      </p>
                     </div>
                     <div className="space-y-2">
                       <Select
-                        label="Bagaimana status pekerjaan calon debitur saat ini berjalan?"
+                        label="Bagaimana status pekerjaan calon debitur saat ini?"
                         value={formData.statusLokasiUsaha}
                         onChange={handleFieldChange("statusLokasiUsaha")}
                       >
                         <option value="">Pilih Status Pekerjaan</option>
-                        <option value="4">Tetap (ASN/BUMN/Karyawan tetap)</option>
-                        <option value="3">Kontrak jangka panjang</option>
+                        <option value="4">Tetap</option>
+                        <option value="3">Kontrak panjang</option>
                         <option value="2">Kontrak pendek</option>
                         <option value="1">Tidak tetap</option>
                       </Select>
+                      <p className="text-[11px] text-slate-500">
+                        SK pengangkatan, kontrak kerja.
+                      </p>
                     </div>
                     <div className="space-y-2">
                       <Select
-                        label="Seberapa stabil penghasilan calon debitur dari waktu ke waktu?"
+                        label="Bagaimana pola penghasilan tetap calon debitur dalam 6 bulan terakhir?"
                         value={formData.ketergantunganTerhadapMusim}
                         onChange={handleFieldChange("ketergantunganTerhadapMusim")}
                       >
                         <option value="">Pilih Stabilitas</option>
-                        <option value="4">Sangat stabil</option>
-                        <option value="3">Cukup stabil</option>
+                        <option value="4">Konsisten</option>
+                        <option value="3">Cukup konsisten</option>
                         <option value="2">Fluktuatif</option>
-                        <option value="1">Tidak stabil</option>
+                        <option value="1">Tidak dapat dipastikan</option>
                       </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Slip gaji, mutasi rekening 6 bulan.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Select
+                        label="Apakah pekerjaan calon debitur memiliki risiko PHK tinggi?"
+                        value={formData.risikoPHKPekerjaan}
+                        onChange={handleFieldChange("risikoPHKPekerjaan")}
+                      >
+                        <option value="">Pilih Risiko</option>
+                        <option value="4">Sangat rendah</option>
+                        <option value="3">Rendah</option>
+                        <option value="2">Sedang</option>
+                        <option value="1">Tinggi</option>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Jenis instansi, status kerja, wawancara debitur.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Select
+                        label="Apakah calon debitur memiliki sumber penghasilan alternatif yang berkelanjutan?"
+                        value={formData.penghasilanAlternatifBerkelanjutan}
+                        onChange={handleFieldChange(
+                          "penghasilanAlternatifBerkelanjutan"
+                        )}
+                      >
+                        <option value="">Pilih Penghasilan</option>
+                        <option value="4">Ada stabil</option>
+                        <option value="3">Ada tidak tetap</option>
+                        <option value="2">Sangat terbatas</option>
+                        <option value="1">Tidak ada</option>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Bukti penghasilan tambahan, mutasi rekening.
+                      </p>
+                    </div>
+                  </>
+                ) : isKreditModalKerja ? (
+                  <>
+                    <div className="space-y-2">
+                      <Select
+                        label="Sumber modal awal usaha"
+                        value={formData.sumberModalAwalUsaha}
+                        onChange={handleFieldChange("sumberModalAwalUsaha")}
+                      >
+                        <option value="">Pilih Sumber Modal</option>
+                        <option value="4">100% sendiri</option>
+                        <option value="3">{">50% sendiri"}</option>
+                        <option value="2">{"<50% sendiri"}</option>
+                        <option value="1">Semua pinjaman</option>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Struktur modal usaha, keterangan debitur.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Select
+                        label="Bukti keterlibatan modal sendiri"
+                        value={formData.buktiKeterlibatanModalSendiri}
+                        onChange={handleFieldChange(
+                          "buktiKeterlibatanModalSendiri"
+                        )}
+                      >
+                        <option value="">Pilih Bukti</option>
+                        <option value="4">Aset atas nama sendiri</option>
+                        <option value="3">Campuran</option>
+                        <option value="2">Mayoritas pinjaman</option>
+                        <option value="1">Tidak terbukti</option>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Aset, nota, foto, dokumen kepemilikan.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Select
+                        label="Aset produktif pribadi (di luar agunan)"
+                        value={formData.asetProduktifPribadi}
+                        onChange={handleFieldChange("asetProduktifPribadi")}
+                      >
+                        <option value="">Pilih Aset Produktif</option>
+                        <option value="4">Ada signifikan</option>
+                        <option value="3">Ada terbatas</option>
+                        <option value="2">Sangat terbatas</option>
+                        <option value="1">Tidak ada</option>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        {">=50% plafon / 25%-<50% / >0%-<25% / 0%"}
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Select
+                        label="Cadangan kas / buffer operasional usaha"
+                        value={formData.cadanganKasOperasionalUsaha}
+                        onChange={handleFieldChange(
+                          "cadanganKasOperasionalUsaha"
+                        )}
+                      >
+                        <option value="">Pilih Cadangan Kas</option>
+                        <option value="4">Ada >=1 bulan operasional</option>
+                        <option value="3">{"Ada <1 bulan"}</option>
+                        <option value="2">Sangat terbatas</option>
+                        <option value="1">Tidak ada</option>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Kas di tempat, saldo rekening, catatan kas.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Select
+                        label="Rekening khusus operasional usaha"
+                        value={formData.rekeningKhususOperasionalUsaha}
+                        onChange={handleFieldChange(
+                          "rekeningKhususOperasionalUsaha"
+                        )}
+                      >
+                        <option value="">Pilih Rekening</option>
+                        <option value="4">Ada & aktif untuk transaksi utama</option>
+                        <option value="3">Ada & digunakan terbatas</option>
+                        <option value="2">Ada tapi tidak digunakan operasional</option>
+                        <option value="1">Tidak ada rekening khusus</option>
+                      </Select>
+                      <p className="text-[11px] text-slate-500">
+                        Mutasi rekening 3-6 bulan, pola setoran.
+                      </p>
                     </div>
                   </>
                 ) : (
@@ -3451,7 +3867,7 @@ const handleSave = async () => {
                   <div className="flex items-end gap-2">
                     <div className="flex-1">
                       <Input
-                        label="Biaya Hutang / Kewajiban Lain"
+                        label="Pinjaman di Bank lain"
                         type="text"
                         value={formatIdInteger(
                           formData.biayaHutangKewajibanLain
@@ -3617,15 +4033,20 @@ const handleSave = async () => {
                   )}
                 </div>
                 {isKreditKonsumtif ? (
-                  <Input
-                    label="Total Penghasilan"
-                    type="text"
-                    value={formatIdInteger(formData.totalPenghasilan)}
-                    readOnly
-                  />
+                  <div className="space-y-1">
+                    <Input
+                      label="Maksimum Angsuran (80% TPP)"
+                      type="text"
+                      value={formatIdInteger(formData.totalPenghasilan)}
+                      readOnly
+                    />
+                    <p className="text-[11px] text-slate-500">
+                      80% dari TPP setelah dikurangi angsuran bank lain (jika ada).
+                    </p>
+                  </div>
                 ) : null}
                 <Input
-                  label="Total Laba"
+                  label="Hasil Pendapatan setelah Dikurangi Pembiayaan"
                   type="text"
                   value={formatIdNumber(formData.labaNettoNonOperasional)}
                   readOnly

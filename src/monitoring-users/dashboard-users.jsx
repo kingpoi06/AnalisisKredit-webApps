@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Sidebar from "../component/sidebar";
 import Header from "../component/header";
 import PageBackground from "../component/PageBackground";
@@ -26,6 +26,37 @@ const KD_PEGAWAI_KEYS = [
   "kdPegawai",
   "kodePegawai",
   "kode_pegawai",
+];
+const KODE_PEGAWAI_KEYS = [
+  "kodePegawai",
+  "kode_pegawai",
+  "kdPegawai",
+  "kd_pegawai",
+  "kdpegawai",
+  "kd_pegawai",
+  "nip",
+  "NIP",
+  "no",
+  "No",
+];
+const NAMA_PEGAWAI_KEYS = [
+  "Nama_Pegawai",
+  "namaPegawai",
+  "nama_pegawai",
+  "namaLengkap",
+  "nama_lengkap",
+  "namalengkap",
+  "Nama Pegawai",
+  "name",
+  "nama",
+];
+const JABATAN_PEGAWAI_KEYS = [
+  "Nama_Jabatan",
+  "jabatan",
+  "namaJabatan",
+  "nama_jabatan",
+  "jabatanPegawai",
+  "jabatan_pegawai",
 ];
 const KODE_KANTOR_KEYS = [
   "kodeKantor",
@@ -69,6 +100,13 @@ const CREATED_AT_KEYS = [
   "tanggal_dibuat",
   "createdDate",
   "created_date",
+];
+const ALAMAT_KANTOR_KEYS = [
+  "alamatKantor",
+  "alamat_kantor",
+  "alamatLengkap",
+  "alamat_lengkap",
+  "alamat",
 ];
 const ROLE_LABELS = {
   officer: "Officer",
@@ -163,6 +201,7 @@ const buildUserRow = (user) => {
     kdPegawai: getFieldValue(user, KD_PEGAWAI_KEYS) || "-",
     kodeKantor: getKodeKantorValue(user) || "-",
     cabangKantor: getCabangKantorValue(user) || "-",
+    alamatKantor: getFieldValue(user, ALAMAT_KANTOR_KEYS) || "-",
     createdAt: getFieldValue(user, CREATED_AT_KEYS),
   };
 };
@@ -187,6 +226,8 @@ export default function DashboardUsers() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState([]);
+  const [cabangKantorList, setCabangKantorList] = useState([]);
+  const [pegawaiList, setPegawaiList] = useState([]);
   const [filterRole, setFilterRole] = useState("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -199,6 +240,8 @@ export default function DashboardUsers() {
     kdPegawai: "",
     kdkantor: "",
     cabangKantor: "",
+    alamatKantor: "",
+    telpKantor: "",
     password: "",
     confPassword: "",
   });
@@ -236,6 +279,8 @@ export default function DashboardUsers() {
 
       axios.defaults.headers.common["Authorization"] = `Bearer ${token}`;
       fetchUsers();
+      fetchCabangKantorList();
+      fetchPegawaiList();
     } catch (err) {
       localStorage.removeItem("accessToken");
       navigate("/");
@@ -258,6 +303,14 @@ export default function DashboardUsers() {
     cabangKantor:
       user?.cabangKantor && user.cabangKantor !== "-"
         ? user.cabangKantor
+        : "",
+    alamatKantor:
+      user?.alamatKantor && user.alamatKantor !== "-"
+        ? user.alamatKantor
+        : "",
+    telpKantor:
+      user?.telpKantor && user.telpKantor !== "-"
+        ? user.telpKantor
         : "",
     password: "",
     confPassword: "",
@@ -282,6 +335,100 @@ export default function DashboardUsers() {
     }
   };
 
+  const buildCabangKantorRow = (item) => ({
+    kodeKantor: getFieldValue(item, KODE_KANTOR_KEYS),
+    cabangKantor: getFieldValue(item, CABANG_KANTOR_KEYS),
+    alamatKantor: getFieldValue(item, ALAMAT_KANTOR_KEYS),
+  });
+
+  const fetchCabangKantorList = async () => {
+    try {
+      const response = await axios.get(API_ENDPOINTS.cabangKantor.list());
+      const payload =
+        response.data?.Data ?? response.data?.data ?? response.data ?? [];
+      const list = normalizeList(payload)
+        .map(buildCabangKantorRow)
+        .filter((row) => row.kodeKantor || row.cabangKantor || row.alamatKantor);
+      setCabangKantorList(list);
+    } catch (err) {
+      console.error("FETCH CABANG KANTOR ERROR:", err);
+      Swal.fire(
+        "Gagal",
+        err.response?.data?.msg || "Gagal mengambil data cabang kantor.",
+        "error"
+      );
+    }
+  };
+
+  const buildPegawaiRow = (item) => {
+    const cabang =
+      item?.cabangKantor ||
+      item?.cabangkantor ||
+      item?.kantor ||
+      item?.cabang ||
+      item?.office ||
+      item?.branch ||
+      item?.unit ||
+      null;
+    const kodeKantor = getFieldValue(item, KODE_KANTOR_KEYS);
+    const resolvedCabang = resolveCabangByKode(kodeKantor);
+    return {
+      kodePegawai: getFieldValue(item, KODE_PEGAWAI_KEYS),
+      namaPegawai: getFieldValue(item, NAMA_PEGAWAI_KEYS),
+      jabatan: getFieldValue(item, JABATAN_PEGAWAI_KEYS),
+      kodeKantor,
+      cabangKantor:
+        getFieldValue(cabang, CABANG_KANTOR_KEYS) ||
+        resolvedCabang?.cabangKantor ||
+        "",
+      alamatKantor:
+        getFieldValue(cabang, ALAMAT_KANTOR_KEYS) ||
+        resolvedCabang?.alamatKantor ||
+        "",
+    };
+  };
+
+  const fetchPegawaiList = async () => {
+    const endpoint = API_ENDPOINTS.pegawai?.list?.();
+    if (!endpoint) {
+      setPegawaiList([]);
+      return;
+    }
+    try {
+      const response = await axios.get(endpoint);
+      const payload =
+        response.data?.Data ?? response.data?.data ?? response.data ?? [];
+      const list = normalizeList(payload)
+        .map(buildPegawaiRow)
+        .filter(
+          (row) =>
+            row.kodePegawai ||
+            row.namaPegawai ||
+            row.jabatan ||
+            row.kodeKantor
+        );
+      setPegawaiList(list);
+    } catch (err) {
+      console.error("FETCH PEGAWAI ERROR:", err);
+      Swal.fire(
+        "Gagal",
+        err.response?.data?.msg || "Gagal mengambil data pegawai.",
+        "error"
+      );
+    }
+  };
+
+  const resolveCabangByKode = (kodeKantor) => {
+    const target = String(kodeKantor ?? "").trim().toLowerCase();
+    if (!target) return null;
+    return (
+      cabangKantorList.find(
+        (row) =>
+          String(row.kodeKantor ?? "").trim().toLowerCase() === target
+      ) || null
+    );
+  };
+
   const openEditModal = (user) => {
     setEditingUser(user);
     setEditForm(buildEditFormFromUser(user));
@@ -296,6 +443,31 @@ export default function DashboardUsers() {
   const handleCreateChange = (field) => (event) => {
     const value = event.target.value;
     setCreateForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleKodeKantorChange = (formSetter) => (event) => {
+    const value = event.target.value;
+    const selected = resolveCabangByKode(value);
+    formSetter((prev) => ({
+      ...prev,
+      kdkantor: value,
+      cabangKantor: selected?.cabangKantor || "",
+      alamatKantor: selected?.alamatKantor || "",
+    }));
+  };
+
+  const handlePegawaiSelect = (pegawai) => {
+    if (!pegawai) return;
+    const kodePegawai = String(pegawai.kodePegawai ?? "").trim();
+    setCreateForm((prev) => ({
+      ...prev,
+      kdPegawai: kodePegawai,
+      name: pegawai.namaPegawai || "",
+      jabatan: pegawai.jabatan || "",
+      kdkantor: pegawai.kodeKantor || "",
+      cabangKantor: pegawai.cabangKantor || "",
+      alamatKantor: pegawai.alamatKantor || "",
+    }));
   };
 
   const handleSaveEdit = async () => {
@@ -318,6 +490,12 @@ export default function DashboardUsers() {
     }
     if (editForm.cabangKantor.trim()) {
       payload.cabangKantor = editForm.cabangKantor.trim();
+    }
+    if (editForm.alamatKantor.trim()) {
+      payload.alamatKantor = editForm.alamatKantor.trim();
+    }
+    if (editForm.telpKantor.trim()) {
+      payload.telpKantor = editForm.telpKantor.trim();
     }
     const passwordValue = editForm.password.trim();
     const confPasswordValue = editForm.confPassword.trim();
@@ -542,6 +720,40 @@ export default function DashboardUsers() {
     return haystack.includes(normalizedQuery);
   });
 
+  const kantorOptions = useMemo(
+    () =>
+      cabangKantorList
+        .map((row) => {
+          const kode = row.kodeKantor || "";
+          if (!kode) return null;
+          const label = row.cabangKantor ? `${kode} - ${row.cabangKantor}` : kode;
+          return { value: kode, label };
+        })
+        .filter(Boolean),
+    [cabangKantorList]
+  );
+  const pegawaiOptions = useMemo(
+    () =>
+      pegawaiList
+        .map((pegawai) => {
+          const kode = String(pegawai.kodePegawai ?? "").trim();
+          if (!kode) return null;
+          const nama = String(pegawai.namaPegawai ?? "").trim();
+          const label = `${kode} - ${nama || "-"}`;
+          return { value: kode, label, pegawai };
+        })
+        .filter(Boolean),
+    [pegawaiList]
+  );
+  const roleOptions = useMemo(
+    () => [
+      { value: "officer", label: "Officer" },
+      { value: "komitecabang", label: "Komite Cabang" },
+      { value: "superadmin", label: "Superadmin" },
+    ],
+    []
+  );
+
   if (loading) {
     return (
       <div className="h-screen flex items-center justify-center">
@@ -740,24 +952,78 @@ export default function DashboardUsers() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="block text-sm font-medium mb-1">
+                  Kode Pegawai
+                </label>
+                <SearchablePegawaiSelect
+                  value={createForm.kdPegawai}
+                  options={pegawaiOptions}
+                  placeholder="Cari kode atau nama pegawai..."
+                  onSelect={handlePegawaiSelect}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">
                   Nama Lengkap
                 </label>
                 <input
                   type="text"
                   value={createForm.name}
-                  onChange={handleCreateChange("name")}
-                  className="w-full border rounded-md p-2 text-sm"
+                  readOnly
+                  className="w-full border rounded-md bg-gray-50 p-2 text-sm text-gray-600"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Alamat Kantor
+                </label>
+                <input
+                  type="text"
+                  value={createForm.alamatKantor}
+                  readOnly
+                  className="w-full border rounded-md bg-gray-50 p-2 text-sm text-gray-600"
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">
-                  Username
+                  Jabatan
                 </label>
                 <input
                   type="text"
-                  value={createForm.username}
-                  onChange={handleCreateChange("username")}
-                  className="w-full border rounded-md p-2 text-sm"
+                  value={createForm.jabatan}
+                  readOnly
+                  className="w-full border rounded-md bg-gray-50 p-2 text-sm text-gray-600"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Kode Kantor
+                </label>
+                <SearchableKantorSelect
+                  value={createForm.kdkantor}
+                  options={kantorOptions}
+                  placeholder="Pilih Kode Kantor"
+                  onChange={(value) =>
+                    handleKodeKantorChange(setCreateForm)({
+                      target: { value },
+                    })
+                  }
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Cabang Kantor
+                </label>
+                <input
+                  type="text"
+                  value={createForm.cabangKantor}
+                  readOnly
+                  className="w-full border rounded-md bg-gray-50 p-2 text-sm text-gray-600"
                 />
               </div>
             </div>
@@ -773,83 +1039,6 @@ export default function DashboardUsers() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">Role</label>
-                <select
-                  value={createForm.role}
-                  onChange={handleCreateChange("role")}
-                  className="w-full border rounded-md p-2 text-sm"
-                >
-                  <option value="">Pilih Role</option>
-                  <option value="officer">Officer</option>
-                  <option value="komitecabang">Komite Cabang</option>
-                  <option value="superadmin">Superadmin</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Jabatan
-                </label>
-                <input
-                  type="text"
-                  value={createForm.jabatan}
-                  onChange={handleCreateChange("jabatan")}
-                  className="w-full border rounded-md p-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Kode Pegawai
-                </label>
-                <input
-                  type="text"
-                  value={createForm.kdPegawai}
-                  onChange={handleCreateChange("kdPegawai")}
-                  className="w-full border rounded-md p-2 text-sm"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Kode Kantor
-                </label>
-                <input
-                  type="text"
-                  value={createForm.kdkantor}
-                  onChange={handleCreateChange("kdkantor")}
-                  className="w-full border rounded-md p-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Cabang Kantor
-                </label>
-                <input
-                  type="text"
-                  value={createForm.cabangKantor}
-                  onChange={handleCreateChange("cabangKantor")}
-                  className="w-full border rounded-md p-2 text-sm"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  Alamat Kantor
-                </label>
-                <input
-                  type="text"
-                  value={createForm.alamatKantor}
-                  onChange={handleCreateChange("alamatKantor")}
-                  className="w-full border rounded-md p-2 text-sm"
-                />
-              </div>
-              <div>
                 <label className="block text-sm font-medium mb-1">
                   Telp Kantor
                 </label>
@@ -858,6 +1047,30 @@ export default function DashboardUsers() {
                   value={createForm.telpKantor}
                   onChange={handleCreateChange("telpKantor")}
                   className="w-full border rounded-md p-2 text-sm"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Username
+                </label>
+                <input
+                  type="text"
+                  value={createForm.username}
+                  onChange={handleCreateChange("username")}
+                  className="w-full border rounded-md p-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Role</label>
+                <SearchableRoleSelect
+                  value={createForm.role}
+                  options={roleOptions}
+                  placeholder="Pilih Role"
+                  onChange={(value) =>
+                    handleCreateChange("role")({ target: { value } })
+                  }
                 />
               </div>
             </div>
@@ -911,16 +1124,12 @@ export default function DashboardUsers() {
             />
 
             <label className="block text-sm font-medium mb-1">Role</label>
-            <select
+            <SearchableRoleSelect
               value={editForm.role}
-              onChange={handleEditChange("role")}
-              className="w-full border rounded-md p-2 mb-4 text-sm"
-            >
-              <option value="">Pilih Role</option>
-              <option value="officer">Officer</option>
-              <option value="komitecabang">Komite Cabang</option>
-              <option value="superadmin">Superadmin</option>
-            </select>
+              options={roleOptions}
+              placeholder="Pilih Role"
+              onChange={(value) => handleEditChange("role")({ target: { value } })}
+            />
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
               <div>
@@ -938,11 +1147,15 @@ export default function DashboardUsers() {
                 <label className="block text-sm font-medium mb-1">
                   Kode Kantor
                 </label>
-                <input
-                  type="text"
+                <SearchableKantorSelect
                   value={editForm.kdkantor}
-                  onChange={handleEditChange("kdkantor")}
-                  className="w-full border rounded-md p-2 text-sm"
+                  options={kantorOptions}
+                  placeholder="Pilih Kode Kantor"
+                  onChange={(value) =>
+                    handleKodeKantorChange(setEditForm)({
+                      target: { value },
+                    })
+                  }
                 />
               </div>
             </div>
@@ -954,7 +1167,31 @@ export default function DashboardUsers() {
               <input
                 type="text"
                 value={editForm.cabangKantor}
-                onChange={handleEditChange("cabangKantor")}
+                readOnly
+                className="w-full border rounded-md p-2 text-sm"
+              />
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium mb-1">
+                Alamat Kantor
+              </label>
+              <input
+                type="text"
+                value={editForm.alamatKantor}
+                readOnly
+                className="w-full border rounded-md p-2 text-sm"
+              />
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium mb-1">
+                Telp Kantor
+              </label>
+              <input
+                type="text"
+                value={editForm.telpKantor}
+                onChange={handleEditChange("telpKantor")}
                 className="w-full border rounded-md p-2 text-sm"
               />
             </div>
@@ -1038,3 +1275,262 @@ const StatCard = ({ title, value, icon, color }) => (
     </div>
   </div>
 );
+
+const SearchableKantorSelect = ({
+  value,
+  options,
+  onChange,
+  placeholder = "Pilih Kode Kantor",
+}) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (!containerRef.current?.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredOptions = normalizedQuery
+    ? options.filter((option) => {
+        const label = String(option.label ?? "").toLowerCase();
+        const val = String(option.value ?? "").toLowerCase();
+        return label.includes(normalizedQuery) || val.includes(normalizedQuery);
+      })
+    : options;
+
+  const selectedLabel =
+    options.find((option) => option.value === value)?.label || "";
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      >
+        <span className={selectedLabel ? "text-gray-700" : "text-gray-400"}>
+          {selectedLabel || placeholder}
+        </span>
+      </button>
+
+      {open ? (
+        <div className="absolute z-50 mt-2 w-full rounded-md border border-gray-200 bg-white shadow-lg">
+          <div className="border-b border-gray-100 p-2">
+            <input
+              type="text"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Cari kode atau nama kantor..."
+              className="w-full rounded-md border border-gray-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+          <div className="max-h-48 overflow-auto py-1 text-sm">
+            {filteredOptions.length ? (
+              filteredOptions.map((option) => (
+                <button
+                  type="button"
+                  key={option.value}
+                  onClick={() => {
+                    onChange(option.value);
+                    setOpen(false);
+                    setQuery("");
+                  }}
+                  className={`block w-full px-3 py-2 text-left hover:bg-indigo-50 ${
+                    option.value === value ? "bg-indigo-100 text-indigo-700" : ""
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))
+            ) : (
+              <div className="px-3 py-2 text-gray-400">
+                Tidak ada hasil.
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
+const SearchableRoleSelect = ({
+  value,
+  options,
+  onChange,
+  placeholder = "Pilih Role",
+}) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (!containerRef.current?.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredOptions = normalizedQuery
+    ? options.filter((option) => {
+        const label = String(option.label ?? "").toLowerCase();
+        const val = String(option.value ?? "").toLowerCase();
+        return label.includes(normalizedQuery) || val.includes(normalizedQuery);
+      })
+    : options;
+
+  const selectedLabel =
+    options.find((option) => option.value === value)?.label || "";
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      >
+        <span className={selectedLabel ? "text-gray-700" : "text-gray-400"}>
+          {selectedLabel || placeholder}
+        </span>
+      </button>
+
+      {open ? (
+        <div className="absolute z-50 mt-2 w-full rounded-md border border-gray-200 bg-white shadow-lg">
+          <div className="border-b border-gray-100 p-2">
+            <input
+              type="text"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Cari role..."
+              className="w-full rounded-md border border-gray-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+          <div className="max-h-48 overflow-auto py-1 text-sm">
+            {filteredOptions.length ? (
+              filteredOptions.map((option) => (
+                <button
+                  type="button"
+                  key={option.value}
+                  onClick={() => {
+                    onChange(option.value);
+                    setOpen(false);
+                    setQuery("");
+                  }}
+                  className={`block w-full px-3 py-2 text-left hover:bg-indigo-50 ${
+                    option.value === value ? "bg-indigo-100 text-indigo-700" : ""
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))
+            ) : (
+              <div className="px-3 py-2 text-gray-400">
+                Tidak ada hasil.
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
+const SearchablePegawaiSelect = ({
+  value,
+  options,
+  onSelect,
+  placeholder = "Cari kode atau nama pegawai...",
+}) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (!containerRef.current?.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredOptions = normalizedQuery
+    ? options.filter((option) => {
+        const label = String(option.label ?? "").toLowerCase();
+        const val = String(option.value ?? "").toLowerCase();
+        return label.includes(normalizedQuery) || val.includes(normalizedQuery);
+      })
+    : [];
+
+  const selectedLabel =
+    options.find((option) => option.value === value)?.label || "";
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm text-gray-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      >
+        <span className={selectedLabel ? "text-gray-700" : "text-gray-400"}>
+          {selectedLabel || placeholder}
+        </span>
+      </button>
+
+      {open ? (
+        <div className="absolute z-50 mt-2 w-full rounded-md border border-gray-200 bg-white shadow-lg">
+          <div className="border-b border-gray-100 p-2">
+            <input
+              type="text"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={placeholder}
+              className="w-full rounded-md border border-gray-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+          <div className="max-h-48 overflow-auto py-1 text-sm">
+            {!normalizedQuery ? (
+              <div className="px-3 py-2 text-gray-400">
+                Ketik kode atau nama pegawai untuk mencari.
+              </div>
+            ) : filteredOptions.length ? (
+              filteredOptions.map((option) => (
+                <button
+                  type="button"
+                  key={option.value}
+                  onClick={() => {
+                    onSelect(option.pegawai);
+                    setOpen(false);
+                    setQuery("");
+                  }}
+                  className={`block w-full px-3 py-2 text-left hover:bg-indigo-50 ${
+                    option.value === value ? "bg-indigo-100 text-indigo-700" : ""
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))
+            ) : (
+              <div className="px-3 py-2 text-gray-400">
+                Tidak ada hasil.
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+};

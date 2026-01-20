@@ -156,6 +156,13 @@ export default function Dashboard() {
     return normalized;
   };
 
+  const isKreditKonsumtifPegawai = (value) => {
+    if (!value) return false;
+    const normalized = String(value).toLowerCase();
+    if (normalized.includes("kredit konsumtif")) return true;
+    return /\b123\b/.test(normalized);
+  };
+
   useEffect(() => {
     const token = localStorage.getItem("accessToken");
     if (!token) {
@@ -198,13 +205,23 @@ export default function Dashboard() {
 
   const fetchDashboard = async () => {
     try {
-      const [summaryRes, listRes, dataDiriRes, dataPermohonanRes, dataUsahaRes, dataJaminanRes, dataAnalisisRes] =
+      const [
+        summaryRes,
+        listRes,
+        dataDiriRes,
+        dataPermohonanRes,
+        dataUsahaRes,
+        dataInstansiRes,
+        dataJaminanRes,
+        dataAnalisisRes,
+      ] =
         await Promise.all([
         axios.get(API_ENDPOINTS.datanasabah.dashboard()),
         axios.get(API_ENDPOINTS.generate.noPermohonan()),
         axios.get(API_ENDPOINTS.datanasabah.dataDiri.list()),
         axios.get(API_ENDPOINTS.datanasabah.dataPermohonan.list()),
         axios.get(API_ENDPOINTS.datanasabah.dataUsaha.list()),
+        axios.get(API_ENDPOINTS.datanasabah.dataInstansi.list()),
         axios.get(API_ENDPOINTS.datanasabah.dataJaminan.list()),
         axios.get(API_ENDPOINTS.datanasabah.dataAnalisis.list()),
       ]);
@@ -226,6 +243,7 @@ export default function Dashboard() {
       const dataDiriList = normalizeList(dataDiriRes.data?.Data);
       const dataPermohonanList = normalizeList(dataPermohonanRes.data?.Data);
       const dataUsahaList = normalizeList(dataUsahaRes.data?.Data);
+      const dataInstansiList = normalizeList(dataInstansiRes.data?.Data);
       const dataJaminanList = normalizeList(dataJaminanRes.data?.Data);
       const dataAnalisisList = normalizeList(dataAnalisisRes.data?.Data);
       const nikByPermohonan = new Map(
@@ -245,6 +263,9 @@ export default function Dashboard() {
       );
       const usahaSet = new Set(
         dataUsahaList.map((item) => item.no_permohonan ?? item.noPermohonan)
+      );
+      const instansiSet = new Set(
+        dataInstansiList.map((item) => item.no_permohonan ?? item.noPermohonan)
       );
       const caraPengembalianMap = new Map();
       dataUsahaList.forEach((item) => {
@@ -304,11 +325,18 @@ export default function Dashboard() {
             "kodeJenisKredit",
           ]);
         const jenisKreditLabel = resolveJenisKreditLabel(rawJenisKredit);
+        const isKreditKonsumtif = isKreditKonsumtifPegawai(
+          jenisKreditLabel || rawJenisKredit
+        );
         const hasDataDiri = nikByPermohonan.has(noPermohonanKey);
         const hasDataPermohonan = permohonanSet.has(noPermohonanKey);
         const hasDataUsaha = usahaSet.has(noPermohonanKey);
+        const hasDataInstansi = instansiSet.has(noPermohonanKey);
         const hasDataJaminan = jaminanSet.has(noPermohonanKey);
         const hasDataAnalisis = analisisSet.has(noPermohonanKey);
+        const hasDataFasilitas = isKreditKonsumtif
+          ? hasDataPermohonan && hasDataInstansi
+          : hasDataPermohonan && hasDataUsaha;
 
         return {
           ...item,
@@ -316,8 +344,10 @@ export default function Dashboard() {
           hasDataDiri,
           hasDataPermohonan,
           hasDataUsaha,
+          hasDataInstansi,
           hasDataJaminan,
           hasDataAnalisis,
+          hasDataFasilitas,
           permohonanData,
           jenisKreditLabel,
           jenisPengikatan: pengikatanMap.get(noPermohonanKey) || "",
@@ -669,7 +699,7 @@ const handleSave = async () => {
                                 </button>
                                 <button
                                   onClick={() => {
-                                    if (!(item.hasDataPermohonan && item.hasDataUsaha)) {
+                                    if (!item.hasDataFasilitas) {
                                       navigate(
                                         `/master-data/data-permohonan/${encodeURIComponent(
                                           item.no_permohonan
@@ -677,11 +707,10 @@ const handleSave = async () => {
                                       );
                                     }
                                   }}
-                                  disabled={item.hasDataPermohonan && item.hasDataUsaha}
+                                  disabled={item.hasDataFasilitas}
                                   className={`inline-flex items-center justify-center gap-1 min-w-[120px] px-3 py-1.5 rounded-lg text-sm font-medium transition
                                             ${
-                                              item.hasDataPermohonan &&
-                                              item.hasDataUsaha
+                                              item.hasDataFasilitas
                                                 ? "bg-gray-200 text-gray-500 cursor-not-allowed"
                                                 : "bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
                                             }`}
@@ -743,8 +772,8 @@ const handleSave = async () => {
                                 Data Diri
                               </button>
                               <button
-                                onClick={() => {
-                                  if (item.hasDataPermohonan && item.hasDataUsaha) {
+                                  onClick={() => {
+                                  if (item.hasDataFasilitas) {
                                     navigate(
                                       `/update-data/data-permohonan/${encodeURIComponent(
                                         item.no_permohonan
@@ -752,10 +781,10 @@ const handleSave = async () => {
                                     );
                                   }
                                 }}
-                                disabled={!(item.hasDataPermohonan && item.hasDataUsaha)}
+                                disabled={!item.hasDataFasilitas}
                                 className={`inline-flex items-center justify-center gap-1 min-w-[120px] px-3 py-1.5 rounded-lg text-sm font-medium transition
                                           ${
-                                            item.hasDataPermohonan && item.hasDataUsaha
+                                            item.hasDataFasilitas
                                               ? "bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
                                               : "bg-gray-200 text-gray-500 cursor-not-allowed"
                                           }`}

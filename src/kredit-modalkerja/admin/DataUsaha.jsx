@@ -649,7 +649,7 @@ const handleSave = async () => {
 
     const plafonValue = toNumber(formData.plafonPinjaman);
     const nextRoute =
-      plafonValue > 10000000
+      plafonValue > 40000000
         ? `/master-data/data-jaminan/${encodeURIComponent(no_permohonan)}`
         : "/dashboard";
     navigate(nextRoute);

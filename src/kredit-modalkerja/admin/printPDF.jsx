@@ -166,6 +166,13 @@ const isKreditKonsumtifPegawai = (value) => {
   return /\b123\b/.test(normalized);
 };
 
+const isKreditModalKerjaType = (value) => {
+  if (!value) return false;
+  const normalized = String(value).toLowerCase();
+  if (normalized.includes("kredit modal kerja")) return true;
+  return /\b121\b/.test(normalized);
+};
+
 const getOptionLabel = (value, options) => {
   const key = String(value ?? "").trim();
   if (!key) return "";
@@ -346,6 +353,26 @@ const PENGUSUL_KD_KEYS = [
   "kd_petugas",
 ];
 
+const ROLE_KEYS = ["role", "jabatan", "level", "userRole", "user_role"];
+const KODE_KANTOR_KEYS = [
+  "kodeKantor",
+  "kode_kantor",
+  "kodekantor",
+  "kdkantor",
+  "kd_kantor",
+  "kdKantor",
+  "cabangKantor",
+  "cabang_kantor",
+  "kodeCabang",
+  "kode_cabang",
+  "kodeKantorCabang",
+  "kode_kantor_cabang",
+  "kodeCabangKantor",
+  "kode_cabang_kantor",
+  "kdCabang",
+  "kd_cabang",
+];
+const NESTED_KODE_KANTOR_KEYS = [...KODE_KANTOR_KEYS, "kode", "id"];
 const CABANG_KANTOR_KEYS = ["cabangKantor", "cabang_kantor", "cabangkantor"];
 
 const formatJenisKreditLabel = (value) => {
@@ -378,17 +405,48 @@ const getFieldValue = (source, keys, fallback = "") => {
   return fallback;
 };
 
-const fetchPegawaiNameByKd = async (kdPegawaiValue) => {
-  if (!kdPegawaiValue) return "";
+const normalizeRole = (value) =>
+  String(value ?? "").toLowerCase().replace(/[_\s]+/g, "");
+
+const getKodeKantorValue = (user) =>
+  getFieldValue(user, KODE_KANTOR_KEYS) ||
+  getFieldValue(user?.kantor, NESTED_KODE_KANTOR_KEYS) ||
+  getFieldValue(user?.cabang, NESTED_KODE_KANTOR_KEYS) ||
+  getFieldValue(user?.office, NESTED_KODE_KANTOR_KEYS) ||
+  getFieldValue(user?.branch, NESTED_KODE_KANTOR_KEYS) ||
+  getFieldValue(user?.unit, NESTED_KODE_KANTOR_KEYS) ||
+  "";
+
+const fetchPegawaiProfileByKd = async (kdPegawaiValue) => {
+  if (!kdPegawaiValue) return null;
   try {
     const response = await axios.get(
       API_ENDPOINTS.users.detail(kdPegawaiValue)
     );
     const payload =
       response.data?.Data ?? response.data?.data ?? response.data ?? {};
-    const userPayload = Array.isArray(payload) ? payload[0] : payload;
-    if (!userPayload || typeof userPayload !== "object") return "";
-    return getFieldValue(userPayload, USER_NAME_KEYS);
+    return Array.isArray(payload) ? payload[0] : payload;
+  } catch {
+    return null;
+  }
+};
+
+const fetchKomiteCabangNameByKantor = async (kodeKantorValue) => {
+  const normalizedTarget = String(kodeKantorValue ?? "").trim().toLowerCase();
+  if (!normalizedTarget) return "";
+  try {
+    const response = await axios.get(API_ENDPOINTS.users.list());
+    const payload =
+      response.data?.Data ?? response.data?.data ?? response.data ?? [];
+    const users = normalizeList(payload);
+    const komiteUser = users.find((user) => {
+      const roleValue = getFieldValue(user, ROLE_KEYS);
+      if (normalizeRole(roleValue) !== "komitecabang") return false;
+      const kodeKantor = getKodeKantorValue(user);
+      return String(kodeKantor ?? "").trim().toLowerCase() === normalizedTarget;
+    });
+    if (!komiteUser) return "";
+    return getFieldValue(komiteUser, USER_NAME_KEYS);
   } catch {
     return "";
   }
@@ -812,7 +870,7 @@ const PageHeader = ({
             {alamatKantor || "-"}
           </p>
           <p className="text-[10px] text-slate-600">
-            Telp. {telpKantor || "-"}
+            Telp. (0370) 641875
           </p>
         </div>
       </div>
@@ -846,6 +904,8 @@ export default function PrintPDF() {
     kdpegawai: "",
   });
   const [pengusulName, setPengusulName] = useState("");
+  const [pemutusName, setPemutusName] = useState("");
+  const [pengusulKantor, setPengusulKantor] = useState("");
   const [loading, setLoading] = useState(true);
   const [reportData, setReportData] = useState({
     permohonan: null,
@@ -853,6 +913,7 @@ export default function PrintPDF() {
     dataDiri: null,
     dataPermohonan: null,
     dataUsaha: null,
+    dataInstansi: null,
     dataAnalisis: null,
     dataJaminan: [],
   });
@@ -1055,6 +1116,7 @@ export default function PrintPDF() {
           dataDiriRes,
           dataPermohonanRes,
           dataUsahaRes,
+          dataInstansiRes,
           dataJaminanRes,
           dataAnalisisRes,
         ] = await Promise.all([
@@ -1065,6 +1127,7 @@ export default function PrintPDF() {
           axios.get(API_ENDPOINTS.datanasabah.dataDiri.list()),
           axios.get(API_ENDPOINTS.datanasabah.dataPermohonan.list()),
           axios.get(API_ENDPOINTS.datanasabah.dataUsaha.list()),
+          axios.get(API_ENDPOINTS.datanasabah.dataInstansi.list()),
           axios.get(API_ENDPOINTS.datanasabah.dataJaminan.list()),
           axios.get(API_ENDPOINTS.datanasabah.dataAnalisis.list()),
         ]);
@@ -1083,6 +1146,7 @@ export default function PrintPDF() {
           dataPermohonanRes.data?.Data
         );
         const dataUsahaList = normalizeList(dataUsahaRes.data?.Data);
+        const dataInstansiList = normalizeList(dataInstansiRes.data?.Data);
         const dataJaminanList = normalizeList(dataJaminanRes.data?.Data);
         const dataAnalisisList = normalizeList(dataAnalisisRes.data?.Data);
 
@@ -1095,6 +1159,7 @@ export default function PrintPDF() {
           dataDiri: matchByPermohonan(dataDiriList, no_permohonan),
           dataPermohonan: matchByPermohonan(dataPermohonanList, no_permohonan),
           dataUsaha: matchByPermohonan(dataUsahaList, no_permohonan),
+          dataInstansi: matchByPermohonan(dataInstansiList, no_permohonan),
           dataAnalisis: matchByPermohonan(dataAnalisisList, no_permohonan),
           dataJaminan: dataJaminanList.filter(
             (item) =>
@@ -1176,6 +1241,7 @@ export default function PrintPDF() {
   const dataDiri = reportData.dataDiri || {};
   const dataPermohonan = reportData.dataPermohonan || {};
   const dataUsaha = reportData.dataUsaha || {};
+  const dataInstansi = reportData.dataInstansi || {};
   const dataAnalisis = reportData.dataAnalisis || {};
   const dataJaminan = reportData.dataJaminan || [];
   const pengusulKdPegawai =
@@ -1188,11 +1254,18 @@ export default function PrintPDF() {
     const loadPengusulName = async () => {
       if (!pengusulKdPegawai) {
         setPengusulName("");
+        setPengusulKantor("");
         return;
       }
-      const fetchedName = await fetchPegawaiNameByKd(pengusulKdPegawai);
+      const userPayload = await fetchPegawaiProfileByKd(pengusulKdPegawai);
       if (!isActive) return;
-      setPengusulName(fetchedName || "");
+      if (!userPayload || typeof userPayload !== "object") {
+        setPengusulName("");
+        setPengusulKantor("");
+        return;
+      }
+      setPengusulName(getFieldValue(userPayload, USER_NAME_KEYS) || "");
+      setPengusulKantor(getKodeKantorValue(userPayload) || "");
     };
 
     loadPengusulName();
@@ -1201,6 +1274,30 @@ export default function PrintPDF() {
       isActive = false;
     };
   }, [pengusulKdPegawai]);
+
+  useEffect(() => {
+    let isActive = true;
+    const loadPemutusName = async () => {
+      const kantorValue =
+        pengusulKantor ||
+        getFieldValue(permohonanDetail, KODE_KANTOR_KEYS) ||
+        getFieldValue(permohonan, KODE_KANTOR_KEYS) ||
+        getFieldValue(dataPermohonan, KODE_KANTOR_KEYS);
+      if (!kantorValue) {
+        setPemutusName("");
+        return;
+      }
+      const fetchedName = await fetchKomiteCabangNameByKantor(kantorValue);
+      if (!isActive) return;
+      setPemutusName(fetchedName || "");
+    };
+
+    loadPemutusName();
+
+    return () => {
+      isActive = false;
+    };
+  }, [pengusulKantor, permohonanDetail, permohonan, dataPermohonan]);
   const dataDiriFields = {
     nik: getFieldValue(dataDiri, ["nik", "NIK"]),
     namaLengkap: getFieldValue(dataDiri, [
@@ -1386,11 +1483,61 @@ export default function PrintPDF() {
     tglSKU: getFieldValue(dataUsaha, ["tglSKU", "tgl_sku", "tglsku"]),
     izinKhusus: getFieldValue(dataUsaha, ["izinKhusus", "izin_khusus"]),
   };
-  const dataUsahaUploads = {
-    fotoNIB: getFieldValue(dataUsaha, ["fotoNIB", "foto_nib", "fotonib"]),
-    fotoNPWP: getFieldValue(dataUsaha, ["fotoNPWP", "foto_npwp", "fotonpwp"]),
-    fotoSKU: getFieldValue(dataUsaha, ["fotoSKU", "foto_sku", "fotosku"]),
-    fotodepan: getFieldValue(dataUsaha, ["fotodepan", "foto_depan", "fotoDepan"]),
+  const dataInstansiFields = {
+    namaInstansi: getFieldValue(dataInstansi, [
+      "namaInstansi",
+      "nama_instansi",
+      "instansi",
+      "namaPerusahaan",
+      "nama_perusahaan",
+      "namaTempatKerja",
+      "nama_tempat_kerja",
+    ]),
+    statusInstansi: getFieldValue(dataInstansi, [
+      "statusInstansi",
+      "status_instansi",
+      "statusPerusahaan",
+      "status_perusahaan",
+      "statusInstansiKerja",
+      "status_instansi_kerja",
+    ]),
+    jabatanDebitur: getFieldValue(dataInstansi, [
+      "jabatanDebitur",
+      "jabatan_debitur",
+      "jabatan",
+      "jabatanKerja",
+      "jabatan_kerja",
+    ]),
+    statusPegawai: getFieldValue(dataInstansi, [
+      "statusPegawai",
+      "status_pegawai",
+      "statusPekerjaan",
+      "status_pekerjaan",
+      "statusKerja",
+      "status_kerja",
+    ]),
+    alamatInstansi: getFieldValue(dataInstansi, [
+      "alamatInstansi",
+      "alamat_instansi",
+      "alamatPerusahaan",
+      "alamat_perusahaan",
+      "alamatTempatKerja",
+      "alamat_tempat_kerja",
+      "alamat",
+    ]),
+    desaKelurahan: getFieldValue(dataInstansi, [
+      "desaKelurahan",
+      "desakelurahan",
+      "desa_kelurahan",
+    ]),
+    kecamatan: getFieldValue(dataInstansi, ["kecamatan"]),
+    kabupatenKota: getFieldValue(dataInstansi, [
+      "kabupatenKota",
+      "kabupatenkota",
+      "kabupaten_kota",
+      "kabupaten",
+    ]),
+    provinsi: getFieldValue(dataInstansi, ["provinsi"]),
   };
   const buildUploadUrl = (value) => {
     const trimmed = String(value ?? "").trim();
@@ -1401,19 +1548,6 @@ export default function PrintPDF() {
     }
     return API_ENDPOINTS.uploads(trimmed);
   };
-  const usahaUploadItems = [
-    { key: "fotoNIB", label: "Foto NIB", value: dataUsahaUploads.fotoNIB },
-    { key: "fotoNPWP", label: "Foto NPWP", value: dataUsahaUploads.fotoNPWP },
-    { key: "fotoSKU", label: "Foto SKU", value: dataUsahaUploads.fotoSKU },
-    {
-      key: "fotodepan",
-      label: "Dokumentasi Tempat Usaha",
-      value: dataUsahaUploads.fotodepan,
-    },
-  ]
-    .map((item) => ({ ...item, value: String(item.value ?? "").trim() }))
-    .filter((item) => item.value);
-  const showUsahaUploads = usahaUploadItems.length > 0;
   const dataAnalisisFields = {
     jenisKredit: getFieldValue(dataAnalisis, [
       "jenisKredit",
@@ -1439,6 +1573,10 @@ export default function PrintPDF() {
       "kepatuhanProsesAnalisaKredit",
       "kepatuhan_proses_analisa_kredit",
     ]),
+    tunggakanKewajibanRutinNonKredit: getFieldValue(dataAnalisis, [
+      "tunggakanKewajibanRutinNonKredit",
+      "tunggakan_kewajiban_rutin_non_kredit",
+    ]),
     sumberModalAwalUsaha: getFieldValue(dataAnalisis, [
       "sumberModalAwalUsaha",
       "sumber_modal_awal_usaha",
@@ -1451,6 +1589,14 @@ export default function PrintPDF() {
       "asetProduktifPribadi",
       "aset_produktif_pribadi",
     ]),
+    danaDaruratCalonDebitur: getFieldValue(dataAnalisis, [
+      "danaDaruratCalonDebitur",
+      "dana_darurat_calon_debitur",
+    ]),
+    konsistensiSaldoRekening: getFieldValue(dataAnalisis, [
+      "konsistensiSaldoRekening",
+      "konsistensi_saldo_rekening",
+    ]),
     lamaUsahaBidangSama: getFieldValue(dataAnalisis, [
       "lamaUsahaBidangSama",
       "lama_usaha_bidang_sama",
@@ -1462,6 +1608,34 @@ export default function PrintPDF() {
     ketergantunganTerhadapMusim: getFieldValue(dataAnalisis, [
       "ketergantunganTerhadapMusim",
       "ketergantungan_terhadap_musim",
+    ]),
+    stabilitasOmzetUsaha: getFieldValue(dataAnalisis, [
+      "stabilitasOmzetUsaha",
+      "stabilitas_omzet_usaha",
+    ]),
+    ketergantunganPelangganUtama: getFieldValue(dataAnalisis, [
+      "ketergantunganPelangganUtama",
+      "ketergantungan_pelanggan_utama",
+    ]),
+    cadanganKasOperasionalUsaha: getFieldValue(dataAnalisis, [
+      "cadanganKasOperasionalUsaha",
+      "cadangan_kas_operasional_usaha",
+    ]),
+    rekeningKhususOperasionalUsaha: getFieldValue(dataAnalisis, [
+      "rekeningKhususOperasionalUsaha",
+      "rekening_khusus_operasional_usaha",
+    ]),
+    risikoPHKPekerjaan: getFieldValue(dataAnalisis, [
+      "risikoPHKPekerjaan",
+      "risiko_phk_pekerjaan",
+    ]),
+    penghasilanAlternatifBerkelanjutan: getFieldValue(dataAnalisis, [
+      "penghasilanAlternatifBerkelanjutan",
+      "penghasilan_alternatif_berkelanjutan",
+    ]),
+    jenisNasabah: getFieldValue(dataAnalisis, [
+      "jenisNasabah",
+      "jenis_nasabah",
     ]),
     omsetPerhari: getFieldValue(dataAnalisis, [
       "omsetPerhari",
@@ -1644,28 +1818,88 @@ export default function PrintPDF() {
     permohonan.jenisKredit ||
     "";
   const isKreditKonsumtif = isKreditKonsumtifPegawai(jenisKreditValue);
+  const isKreditModalKerja = isKreditModalKerjaType(jenisKreditValue);
+  const dataUsahaUploads = {
+    fotoNIB: getFieldValue(dataUsaha, ["fotoNIB", "foto_nib", "fotonib"]),
+    fotoNPWP: getFieldValue(dataUsaha, ["fotoNPWP", "foto_npwp", "fotonpwp"]),
+    fotoSKU: getFieldValue(dataUsaha, ["fotoSKU", "foto_sku", "fotosku"]),
+    fotodepan: getFieldValue(dataUsaha, ["fotodepan", "foto_depan", "fotoDepan"]),
+  };
+  const usahaUploadItems = [
+    { key: "fotoNIB", label: "Foto NIB", value: dataUsahaUploads.fotoNIB },
+    { key: "fotoNPWP", label: "Foto NPWP", value: dataUsahaUploads.fotoNPWP },
+    { key: "fotoSKU", label: "Foto SKU", value: dataUsahaUploads.fotoSKU },
+    {
+      key: "fotodepan",
+      label: "Dokumentasi Tempat Usaha",
+      value: dataUsahaUploads.fotodepan,
+    },
+  ]
+    .map((item) => ({ ...item, value: String(item.value ?? "").trim() }))
+    .filter((item) => item.value);
+  const showUsahaUploads = !isKreditKonsumtif && usahaUploadItems.length > 0;
   const capitalOptionSet = isKreditKonsumtif
     ? CAPITAL_OPTION_LABELS.konsumtif
     : CAPITAL_OPTION_LABELS.produktif;
   const capacityOptionSet = isKreditKonsumtif
     ? CAPACITY_OPTION_LABELS.konsumtif
     : CAPACITY_OPTION_LABELS.produktif;
+  const hubunganBankLainValue = String(
+    dataAnalisisFields.jenisNasabah ?? ""
+  ).trim();
+  const isHubunganBankLainAda =
+    hubunganBankLainValue.toLowerCase() === "ada";
   const characterValues = [
     dataAnalisisFields.statusKepemilikanTempatTinggal,
     dataAnalisisFields.lamaTinggalAlamatSaatIni,
     dataAnalisisFields.frekuensiPindahRumah,
     dataAnalisisFields.kepatuhanProsesAnalisaKredit,
+    ...(isKreditModalKerja || isKreditKonsumtif
+      ? [dataAnalisisFields.tunggakanKewajibanRutinNonKredit]
+      : []),
   ];
-  const modalValues = [
-    dataAnalisisFields.sumberModalAwalUsaha,
-    dataAnalisisFields.buktiKeterlibatanModalSendiri,
-    dataAnalisisFields.asetProduktifPribadi,
-  ];
-  const capacityValues = [
-    dataAnalisisFields.lamaUsahaBidangSama,
-    dataAnalisisFields.statusLokasiUsaha,
-    dataAnalisisFields.ketergantunganTerhadapMusim,
-  ];
+  const modalValues = isKreditModalKerja
+    ? [
+        dataAnalisisFields.lamaUsahaBidangSama,
+        dataAnalisisFields.statusLokasiUsaha,
+        dataAnalisisFields.ketergantunganTerhadapMusim,
+        dataAnalisisFields.stabilitasOmzetUsaha,
+        dataAnalisisFields.ketergantunganPelangganUtama,
+      ]
+    : isKreditKonsumtif
+    ? [
+        dataAnalisisFields.sumberModalAwalUsaha,
+        dataAnalisisFields.buktiKeterlibatanModalSendiri,
+        dataAnalisisFields.asetProduktifPribadi,
+        dataAnalisisFields.danaDaruratCalonDebitur,
+        dataAnalisisFields.konsistensiSaldoRekening,
+      ]
+    : [
+        dataAnalisisFields.sumberModalAwalUsaha,
+        dataAnalisisFields.buktiKeterlibatanModalSendiri,
+        dataAnalisisFields.asetProduktifPribadi,
+      ];
+  const capacityValues = isKreditModalKerja
+    ? [
+        dataAnalisisFields.sumberModalAwalUsaha,
+        dataAnalisisFields.buktiKeterlibatanModalSendiri,
+        dataAnalisisFields.asetProduktifPribadi,
+        dataAnalisisFields.cadanganKasOperasionalUsaha,
+        dataAnalisisFields.rekeningKhususOperasionalUsaha,
+      ]
+    : isKreditKonsumtif
+    ? [
+        dataAnalisisFields.lamaUsahaBidangSama,
+        dataAnalisisFields.statusLokasiUsaha,
+        dataAnalisisFields.ketergantunganTerhadapMusim,
+        dataAnalisisFields.risikoPHKPekerjaan,
+        dataAnalisisFields.penghasilanAlternatifBerkelanjutan,
+      ]
+    : [
+        dataAnalisisFields.lamaUsahaBidangSama,
+        dataAnalisisFields.statusLokasiUsaha,
+        dataAnalisisFields.ketergantunganTerhadapMusim,
+      ];
   const slikEntries = no_permohonan
     ? readSlikStorageEntries(no_permohonan)
     : [];
@@ -1686,6 +1920,7 @@ export default function PrintPDF() {
   const statusSlikValue =
     statusSlikLabel ||
     getFieldValue(dataAnalisis, ["statusSlik", "status_slik", "slikStatus"]);
+  const resolvedSlikGrade = String(slikGradeValue ?? "").trim();
   const characterScoreAverage = computeAverage(characterValues, 4);
   const modalScoreAverage = computeAverage(modalValues, 4);
   const capacityScoreAverage = computeAverage(capacityValues, 4);
@@ -1723,7 +1958,9 @@ export default function PrintPDF() {
     dataAnalisisFields.repaymentCapacityStatus ?? ""
   ).trim();
   const rpcScore = rpcStatusLabel.toLowerCase() === "approve" ? 40 : 0;
-  const slikScore = SLIK_GRADE_SCORE_MAP[slikGradeLabel] ?? 0;
+  const slikScore = isHubunganBankLainAda
+    ? SLIK_GRADE_SCORE_MAP[resolvedSlikGrade] ?? 0
+    : 30;
   const totalBobotScore = agunanScore + totalStatusScore + rpcScore + slikScore;
   const statusPengajuanComputed = totalBobotScore < 80 ? "Reject" : "Approve";
   const statusPengajuanDetail = getFieldValue(permohonanDetail, [
@@ -1960,9 +2197,12 @@ export default function PrintPDF() {
     getFieldValue(permohonan, PENGUSUL_NAME_KEYS) ||
     getFieldValue(dataPermohonan, PENGUSUL_NAME_KEYS) ||
     "-";
+  const namaPemutusValue =
+    getFieldValue(permohonanDetail, ["namaPemutus", "nama_pemutus"]) ||
+    permohonanFields.namaPemutus;
   const namaPemutusLabel = isKomiteCabang
-    ? userInfo.namaLengkap || permohonanFields.namaPemutus || "-"
-    : permohonanFields.namaPemutus || "-";
+    ? pemutusName || userInfo.namaLengkap || namaPemutusValue || "-"
+    : pemutusName || namaPemutusValue || "-";
   const tempatTanggalLahir = formatTempatTanggal(
     dataDiriFields.tempatLahir,
     dataDiriFields.tanggalLahir
@@ -1982,6 +2222,13 @@ export default function PrintPDF() {
     dataUsahaFields.kecamatan,
     dataUsahaFields.kabupatenKota,
     dataUsahaFields.provinsi,
+  ]);
+  const alamatInstansi = joinAddress([
+    dataInstansiFields.alamatInstansi,
+    dataInstansiFields.desaKelurahan,
+    dataInstansiFields.kecamatan,
+    dataInstansiFields.kabupatenKota,
+    dataInstansiFields.provinsi,
   ]);
   const sektorEkonomiLabel =
     dataUsahaFields.sektorEkonomi || dataUsahaFields.bidangUsaha;
@@ -2393,7 +2640,7 @@ export default function PrintPDF() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-b border-slate-200 pb-3">
         <div className="space-y-1">
-          <InfoRow label="Nama Bank" value={namaBank} />
+          <InfoRow label="Cabang" value={namaBank} />
           <InfoRow label="Status Aplikasi" value={statusAplikasiLabel} />
           <InfoRow label="No. Aplikasi" value={no_permohonan} />
           <InfoRow label="Tanggal Aplikasi" value={tandaTanggal} />
@@ -2435,16 +2682,39 @@ export default function PrintPDF() {
         </div>
 
         <div>
-          <CompactSectionTitle>II. Data Usaha</CompactSectionTitle>
+          <CompactSectionTitle>
+            {isKreditKonsumtif ? "II. Data Instansi" : "II. Data Usaha"}
+          </CompactSectionTitle>
           <div className="mt-2 space-y-1">
-            <InfoRow label="Nama Usaha" value={dataUsahaFields.namaUsaha} />
-            <InfoRow label="Badan Usaha" value={dataUsahaFields.statusUsaha} />
-            <InfoRow label="Sektor Ekonomi OJK" value={sektorEkonomiLabel} />
-            <InfoRow
-              label="Status Tempat Usaha"
-              value={dataUsahaFields.statusAlamatUsaha}
-            />
-            <InfoRow label="Alamat Usaha" value={alamatUsaha} />
+            {isKreditKonsumtif ? (
+              <>
+                <InfoRow label="Nama Instansi" value={dataInstansiFields.namaInstansi} />
+                <InfoRow
+                  label="Status Instansi"
+                  value={dataInstansiFields.statusInstansi}
+                />
+                <InfoRow label="Alamat Instansi" value={alamatInstansi} />
+                <InfoRow
+                  label="Jabatan Debitur"
+                  value={dataInstansiFields.jabatanDebitur}
+                />
+                <InfoRow
+                  label="Status Pegawai"
+                  value={dataInstansiFields.statusPegawai}
+                />
+              </>
+            ) : (
+              <>
+                <InfoRow label="Nama Usaha" value={dataUsahaFields.namaUsaha} />
+                <InfoRow label="Badan Usaha" value={dataUsahaFields.statusUsaha} />
+                <InfoRow label="Sektor Ekonomi OJK" value={sektorEkonomiLabel} />
+                <InfoRow
+                  label="Status Tempat Usaha"
+                  value={dataUsahaFields.statusAlamatUsaha}
+                />
+                <InfoRow label="Alamat Usaha" value={alamatUsaha} />
+              </>
+            )}
           </div>
         </div>
 
@@ -2526,8 +2796,17 @@ export default function PrintPDF() {
       </div>
     </div>
   ) : null;
+  const tanggalDisetujuiValue = getFieldValue(permohonanDetail, [
+    "tanggalDisetujui",
+    "tanggal_disetujui",
+    "tglDisetujui",
+    "tgl_disetujui",
+  ]);
   const keputusanTanggalLabel =
-    tanggalPermohonanLabel || tandaTanggal || formatDate(new Date());
+    formatDate(tanggalDisetujuiValue) ||
+    tanggalPermohonanLabel ||
+    tandaTanggal ||
+    formatDate(new Date());
   const keputusanLokasiLabel =
     dataUsahaFields.kabupatenKota || dataDiriFields.kabupaten || "";
   const keputusanTempatTanggal = keputusanLokasiLabel
@@ -2632,8 +2911,8 @@ export default function PrintPDF() {
       ""
   );
   const namaPimpinanCabangLabel =
-    isKomiteCabang && userInfo.namaLengkap
-      ? userInfo.namaLengkap
+    isKomiteCabang && (pemutusName || userInfo.namaLengkap)
+      ? pemutusName || userInfo.namaLengkap
       : namaPemutusLabel && namaPemutusLabel !== "-"
       ? namaPemutusLabel
       : "Nama Pimpinan Cabang";

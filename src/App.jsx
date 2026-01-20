@@ -16,6 +16,8 @@ import Kalkulator from "./kredit-modalkerja/admin/Kalkulator";
 // import RekomdanKesimpulan from "./admin/RekomdanKesimpulan";
 import PrintPDF from "./kredit-modalkerja/admin/printPDF";
 import DataInstansi from "./kredit-konsumtif/admin/DataInstansi";
+import UploadCabangKantor from "./master-data/UploadCabangKantor";
+import UploadPegawai from "./master-data/UploadPegawai";
 
 //UPDATE DATE
 import UpdateDataDiriNasabah from "./kredit-modalkerja/update/DataDiri";
@@ -23,6 +25,7 @@ import UpdateDataPermohonan from "./kredit-modalkerja/update/DataPermohonan";
 import UpdateDataJaminan from "./kredit-modalkerja/update/DataJaminan";
 import UpdateDataUsaha from "./kredit-modalkerja/update/DataUsaha";
 import UpdateAnalisis from "./kredit-modalkerja/update/Analisis";
+import UpdateDataInstansi from "./kredit-konsumtif/update/DataInstansi";
 
 
 function App() {
@@ -61,8 +64,11 @@ function App() {
         <Route path="/update-data/data-permohonan/:no_permohonan" element={<UpdateDataPermohonan/>}/>
         <Route path="/update-data/data-usaha/:no_permohonan" element={<UpdateDataUsaha/>}/>
         <Route path="/update-data/analisis/:no_permohonan" element={<UpdateAnalisis/>}/>
+        <Route path="/update-data/data-instansi/:no_permohonan" element={<UpdateDataInstansi/>}/>
 
         <Route path="/master-data/data-instansi/:no_permohonan" element={<DataInstansi/>}/>
+        <Route path="/master-data/cabang-kantor" element={<UploadCabangKantor />} />
+        <Route path="/master-data/pegawai" element={<UploadPegawai />} />
 
         {/* Data Nasabah (DETAIL DATA NASABAH) */}
         <Route path="/printPDF-nasabah/:no_permohonan" element={<PrintPDF />} />

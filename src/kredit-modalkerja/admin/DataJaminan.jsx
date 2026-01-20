@@ -202,6 +202,17 @@ export default function DataJaminan() {
   };
 
   const hasInputValue = (value) => String(value ?? "").trim() !== "";
+  const getPlafonPermohonanValue = (permohonan) => {
+    if (!permohonan) return "";
+    const candidates = [
+      permohonan.plafonPermohonan,
+      permohonan.plafon_permohonan,
+      permohonan.plafonKredit,
+      permohonan.plafon_kredit,
+      permohonan.plafon,
+    ];
+    return candidates.find((value) => hasInputValue(value)) ?? "";
+  };
 
   const getTotalNilaiNJOP = (item) => {
     const hasTanah = hasInputValue(item.nilaiNJOPTanah);
@@ -257,16 +268,13 @@ export default function DataJaminan() {
     const minHakTanggungan = toNumber(plafonValue) * 1.25;
     if (!minHakTanggungan) return "";
 
-    const rerataPasar =
-      item.jenisjaminan === "Sertifikat"
-        ? getNilaiRerataPasar(item)
-        : {
-            total: toNumber(item.rerataNilaiPasar),
-            hasValue: hasInputValue(item.rerataNilaiPasar),
-          };
-    if (!rerataPasar.hasValue) return "";
-
-    return rerataPasar.total >= minHakTanggungan ? "Approve" : "Reject";
+    const nilaiMargin = hasInputValue(item.nilaiLikuidasi)
+      ? toNumber(item.nilaiLikuidasi)
+      : hasInputValue(item.taksiranPasar)
+      ? toNumber(item.taksiranPasar)
+      : toNumber(item.rerataNilaiPasar);
+    if (!nilaiMargin) return "";
+    return nilaiMargin >= minHakTanggungan ? "Approve" : "Reject";
   };
 
   const parseSlikText = (text) => {
@@ -556,7 +564,7 @@ export default function DataJaminan() {
         );
         const data = response.data?.Data ?? response.data?.data;
         const permohonan = Array.isArray(data) ? data[0] : data;
-        setPlafonPermohonan(permohonan?.plafonPermohonan ?? "");
+        setPlafonPermohonan(getPlafonPermohonanValue(permohonan));
       } catch {
         setPlafonPermohonan("");
       }
@@ -1844,27 +1852,11 @@ export default function DataJaminan() {
                         </div>
                       )}
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <Select
-                          label="Setuju Pengikatan"
-                          value={item.statusPengikatan}
-                          onChange={handleItemChange(
-                            index,
-                            "statusPengikatan"
-                          )}
-                        >
-                          <option value="">Pilih</option>
-                          <option value="APHT">APHT</option>
-                          <option value="SKMHT">SKMHT</option>
-                          <option value="LEGES/WARMEKING">LEGES/WARMEKING</option>
-                        </Select>
-                        <Input
-                            label="Status Pengajuan"
-                            value={getApprovalStatus(item) || "-"}
-                            readOnly
-                          />
-                        
-                      </div>
+                      <Input
+                        label="Status Pengajuan"
+                        value={getApprovalStatus(item) || "-"}
+                        readOnly
+                      />
 
                       <Input
                         label="Upload Dokumen Agunan"

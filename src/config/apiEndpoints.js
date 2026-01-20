@@ -22,6 +22,17 @@ export const API_ENDPOINTS = {
       buildUrl(`/usersEditPassword/${encodeURIComponent(id)}`),
     delete: (id) => buildUrl(`/users/${encodeURIComponent(id)}`),
   },
+  cabangKantor: {
+    list: () => buildUrl("/cabangkantor"),
+    update: (kode) => buildUrl(`/cabangkantor/${encodeURIComponent(kode)}`),
+    upload: () => buildUrl("/cabangkantor/upload-xlsx"),
+  },
+  pegawai: {
+    list: () => buildUrl("/pegawai"),
+    upload: () => buildUrl("/pegawai/upload-xlsx"),
+    update: (no) => buildUrl(`/pegawai/${encodeURIComponent(no)}`),
+    delete: (no) => buildUrl(`/pegawai/${encodeURIComponent(no)}`),
+  },
   generate: {
     noPermohonan: () => buildUrl("/generate/no-permohonan"),
     noPermohonanDetail: (id) =>

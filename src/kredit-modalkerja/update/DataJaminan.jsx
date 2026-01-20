@@ -269,16 +269,13 @@ export default function UpdateDataJaminan() {
     const minHakTanggungan = toNumber(plafonValue) * 1.25;
     if (!minHakTanggungan) return "";
 
-    const rerataPasar =
-      item.jenisjaminan === "Sertifikat"
-        ? getNilaiRerataPasar(item)
-        : {
-            total: toNumber(item.rerataNilaiPasar),
-            hasValue: hasInputValue(item.rerataNilaiPasar),
-          };
-    if (!rerataPasar.hasValue) return "";
-
-    return rerataPasar.total >= minHakTanggungan ? "Approve" : "Reject";
+    const nilaiMargin = hasInputValue(item.nilaiLikuidasi)
+      ? toNumber(item.nilaiLikuidasi)
+      : hasInputValue(item.taksiranPasar)
+      ? toNumber(item.taksiranPasar)
+      : toNumber(item.rerataNilaiPasar);
+    if (!nilaiMargin) return "";
+    return nilaiMargin >= minHakTanggungan ? "Approve" : "Reject";
   };
 
   const normalizeList = (data) => {
@@ -286,12 +283,20 @@ export default function UpdateDataJaminan() {
     return Array.isArray(data[0]) ? data.flat() : data;
   };
 
-  const normalizeJaminanItem = (item) => {
-    const base = createEmptyJaminan();
-    const mapped = { ...base };
+const normalizeJaminanItem = (item) => {
+  const base = createEmptyJaminan();
+  const mapped = { ...base };
+  const normalizeChoice = (value, options) => {
+    const trimmed = String(value ?? "").trim();
+    if (!trimmed) return "";
+    const match = options.find(
+      (option) => option.toLowerCase() === trimmed.toLowerCase()
+    );
+    return match ?? trimmed;
+  };
 
-    Object.entries(item || {}).forEach(([rawKey, value]) => {
-      const normalizedKey = normalizeKey(rawKey);
+  Object.entries(item || {}).forEach(([rawKey, value]) => {
+    const normalizedKey = normalizeKey(rawKey);
       if (
         !mapped.slikFileName &&
         typeof value === "string" &&
@@ -311,14 +316,40 @@ export default function UpdateDataJaminan() {
       ) {
         return;
       }
-      if (value !== undefined && value !== null) {
-        mapped[targetKey] = value;
-      }
-    });
+    if (value !== undefined && value !== null) {
+      mapped[targetKey] = value;
+    }
+  });
 
-    mapped.slik = null;
-    mapped.slikTable = { headers: [], rows: [] };
-    mapped.dokumentasiAgunan = null;
+  mapped.jenisjaminan = normalizeChoice(mapped.jenisjaminan, [
+    "Sertifikat",
+    "BPKB",
+    "Tabungan",
+    "Deposito",
+  ]);
+  mapped.statusPengikatan = normalizeChoice(mapped.statusPengikatan, [
+    "APHT",
+    "SKMHT",
+    "LEGES/WARMEKING",
+  ]);
+  mapped.hubungandengannasabah = normalizeChoice(
+    mapped.hubungandengannasabah,
+    ["Pemilik Langsung", "Suami/Istri", "Keluarga", "Kerabat"]
+  );
+  mapped.hubDgnBPR = normalizeChoice(mapped.hubDgnBPR, ["Ya", "Tidak"]);
+  mapped.statusHubBankLain = normalizeChoice(mapped.statusHubBankLain, [
+    "Ya",
+    "Tidak",
+  ]);
+  mapped.jenisHub = normalizeChoice(mapped.jenisHub, [
+    "Penabung",
+    "Deposito",
+    "Kredit",
+  ]);
+
+  mapped.slik = null;
+  mapped.slikTable = { headers: [], rows: [] };
+  mapped.dokumentasiAgunan = null;
 
     if (mapped.jenisjaminan === "BPKB") {
       mapped.safetyMargin = mapped.safetyMargin || "50";
@@ -2011,27 +2042,11 @@ export default function UpdateDataJaminan() {
                         </div>
                       )}
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <Select
-                          label="Setuju Pengikatan"
-                          value={item.statusPengikatan}
-                          onChange={handleItemChange(
-                            index,
-                            "statusPengikatan"
-                          )}
-                        >
-                          <option value="">Pilih</option>
-                          <option value="APHT">APHT</option>
-                          <option value="SKMHT">SKMHT</option>
-                          <option value="LEGES/WARMEKING">LEGES/WARMEKING</option>
-                        </Select>
-                        <Input
-                            label="Status Pengajuan"
-                            value={getApprovalStatus(item) || "-"}
-                            readOnly
-                          />
-                        
-                      </div>
+                      <Input
+                        label="Status Pengajuan"
+                        value={getApprovalStatus(item) || "-"}
+                        readOnly
+                      />
 
                       <Input
                         label="Upload Dokumen Agunan"
