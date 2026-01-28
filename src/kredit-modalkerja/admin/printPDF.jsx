@@ -96,6 +96,99 @@ const normalizeList = (data) => {
 
 const normalizeKey = (key) => String(key).replace(/_/g, "").toLowerCase();
 
+const normalizeAngsuranKey = (value) =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
+const buildAngsuranSummary = (caraAngsuranKredit, sistemAngsuranKredit) => {
+  const cara = String(caraAngsuranKredit ?? "").trim();
+  const sistem = String(sistemAngsuranKredit ?? "").trim();
+  if (!cara && !sistem) return "";
+  if (cara && sistem) return `${sistem} (${cara})`;
+  return cara || sistem;
+};
+
+const isKreditMusimanAngsuran = (caraAngsuranKredit) => {
+  const normalized = normalizeAngsuranKey(caraAngsuranKredit);
+  if (!normalized) return false;
+  if (normalized === "bulanan") return false;
+  return normalized.includes("bulan");
+};
+
+const getIntervalFromCara = (caraAngsuranKredit) => {
+  const normalized = normalizeAngsuranKey(caraAngsuranKredit);
+  if (!normalized) return 1;
+  if (normalized.includes("lebih dari 6")) return 12;
+  if (normalized.includes("6")) return 6;
+  if (normalized.includes("3")) return 3;
+  if (normalized.includes("bulanan") || normalized.includes("bulan")) return 1;
+  return 1;
+};
+
+const getIntervalFromSistem = (sistemAngsuranKredit) => {
+  const normalized = normalizeAngsuranKey(sistemAngsuranKredit);
+  if (!normalized) return null;
+  if (normalized.includes("triwulan")) return 3;
+  if (normalized.includes("semester") || normalized.includes("6 bulan")) return 6;
+  if (normalized.includes("setiap bulan")) return 1;
+  return null;
+};
+
+const buildAngsuranDisplay = ({
+  jangkaWaktuKredit,
+  plafonPermohonan,
+  pokokPerBulan,
+  totalBungaPerbulan,
+  caraAngsuranKredit,
+  sistemAngsuranKredit,
+}) => {
+  const months = Math.max(0, Math.floor(toNumber(jangkaWaktuKredit)));
+  if (!months) {
+    return { label: "Total Angsuran", value: "-", periodCount: 0 };
+  }
+
+  const intervalFromSistem = getIntervalFromSistem(sistemAngsuranKredit);
+  const intervalFromCara = getIntervalFromCara(caraAngsuranKredit);
+  const interval = intervalFromSistem || intervalFromCara || 1;
+  const periodCount = Math.ceil(months / interval);
+
+  const monthlyPrincipal = toNumber(pokokPerBulan);
+  const monthlyInterest = toNumber(totalBungaPerbulan);
+  const totalPrincipal = toNumber(plafonPermohonan);
+  const totalInterest = monthlyInterest * months;
+
+  const normalizedSistem = normalizeAngsuranKey(sistemAngsuranKredit);
+  const bayarPokokSaatJt = normalizedSistem.includes("pokok saat jt");
+  const bayarSekaligusSaatJt = normalizedSistem.includes(
+    "dibayar sekaligus saat jt"
+  );
+
+  if (bayarSekaligusSaatJt || bayarPokokSaatJt) {
+    return {
+      label: "Total Bayar Saat JT",
+      value: formatRupiahValue(totalPrincipal + totalInterest, true),
+      periodCount,
+    };
+  }
+
+  const totalPerPeriod = (monthlyPrincipal + monthlyInterest) * interval;
+  const periodLabel =
+    interval === 1 ? "Total Angsuran per Bulan" : `Total Angsuran per ${interval} Bulan`;
+  return {
+    label: periodLabel,
+    value: formatRupiahValue(totalPerPeriod, true),
+    periodCount,
+  };
+};
+
+const buildJangkaWaktuLabel = (jangkaWaktuKredit) => {
+  const base = formatIdInteger(jangkaWaktuKredit);
+  if (!base) return "-";
+  return `${base} Bulan`;
+};
+
 const createEmptyJaminan = () => ({
   jenisjaminan: "",
   statusPengikatan: "",
@@ -452,6 +545,27 @@ const fetchKomiteCabangNameByKantor = async (kodeKantorValue) => {
   }
 };
 
+const fetchPenyeliaNameByKantor = async (kodeKantorValue) => {
+  const normalizedTarget = String(kodeKantorValue ?? "").trim().toLowerCase();
+  if (!normalizedTarget) return "";
+  try {
+    const response = await axios.get(API_ENDPOINTS.users.list());
+    const payload =
+      response.data?.Data ?? response.data?.data ?? response.data ?? [];
+    const users = normalizeList(payload);
+    const penyeliaUser = users.find((user) => {
+      const roleValue = getFieldValue(user, ROLE_KEYS);
+      if (normalizeRole(roleValue) !== "penyelia") return false;
+      const kodeKantor = getKodeKantorValue(user);
+      return String(kodeKantor ?? "").trim().toLowerCase() === normalizedTarget;
+    });
+    if (!penyeliaUser) return "";
+    return getFieldValue(penyeliaUser, USER_NAME_KEYS);
+  } catch {
+    return "";
+  }
+};
+
 const getTotalNilaiNJOP = (item) => {
   const hasTanah = hasInputValue(item?.nilaiNJOPTanah);
   const totalTanah = toNumber(item?.nilaiNJOPTanah);
@@ -530,27 +644,275 @@ const getAgunanScoreForItem = (item, status) => {
   return 15;
 };
 
-const getSlikStorageKey = (permohonan) =>
-  permohonan ? `slik:${permohonan}` : "";
+const looksLikeTxtFileName = (value) =>
+  typeof value === "string" && value.trim().toLowerCase().endsWith(".txt");
 
-const readSlikStorageEntries = (permohonan) => {
-  const storageKey = getSlikStorageKey(permohonan);
-  if (!storageKey) return [];
-  try {
-    const raw = localStorage.getItem(storageKey);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Object.entries(parsed)
-      .map(([index, value]) => ({
-        index: Number(index),
-        fileName: value?.fileName ?? "",
-        table: value?.table ?? { headers: [], rows: [] },
-        source: value?.source ?? "jaminan",
-      }))
-      .sort((a, b) => a.index - b.index);
-  } catch {
-    return [];
+const getSlikTextValue = (item) => {
+  const candidates = [
+    getFieldValue(item, ["slikText", "slik_text", "slikTxt", "sliktext"]),
+  ];
+  const direct = candidates.find(
+    (value) => typeof value === "string" && value.trim() !== ""
+  );
+  if (direct) return direct.trim();
+  const fallback = getFieldValue(item, ["slik"], "");
+  if (
+    typeof fallback === "string" &&
+    fallback.trim() !== "" &&
+    !looksLikeTxtFileName(fallback)
+  ) {
+    return fallback.trim();
   }
+  return "";
+};
+
+const getSlikFileNameValue = (item) => {
+  const candidate = getFieldValue(item, ["slik"], "");
+  if (typeof candidate === "string" && looksLikeTxtFileName(candidate)) {
+    return candidate.trim();
+  }
+  return "";
+};
+
+const getSlikTextValuePenanggung = (item) => {
+  const candidates = [
+    getFieldValue(item, [
+      "slikTextPenanggungJawab",
+      "slik_text_penanggung_jawab",
+      "slikTxtPenanggungJawab",
+      "slik_txt_penanggung_jawab",
+      "sliktextpenanggungjawab",
+    ]),
+  ];
+  const direct = candidates.find(
+    (value) => typeof value === "string" && value.trim() !== ""
+  );
+  if (direct) return direct.trim();
+  const fallback = getFieldValue(
+    item,
+    ["slikPenanggungJawab", "slikPasangan", "slik_pasangan"],
+    ""
+  );
+  if (
+    typeof fallback === "string" &&
+    fallback.trim() !== "" &&
+    !looksLikeTxtFileName(fallback)
+  ) {
+    return fallback.trim();
+  }
+  return "";
+};
+
+const getSlikFileNameValuePenanggung = (item) => {
+  const candidate = getFieldValue(
+    item,
+    ["slikPenanggungJawab", "slikPasangan", "slik_pasangan"],
+    ""
+  );
+  if (typeof candidate === "string" && looksLikeTxtFileName(candidate)) {
+    return candidate.trim();
+  }
+  return "";
+};
+
+const parseSlikText = (text) => {
+  const rawText = String(text ?? "");
+  const trimmedText = rawText.trim();
+  if (!trimmedText) {
+    return { headers: [], rows: [] };
+  }
+
+  const normalizeKey = (value) =>
+    String(value ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
+
+  const expectedKeys = [
+    "namadebitur",
+    "ljkket",
+    "jeniskreditpembiayaan",
+    "jeniskreditpembiayaanket",
+    "plafon",
+    "bakidebet",
+    "sukubungaimbalan",
+    "tanggalakadawal",
+    "tanggaljatuhtempo",
+    "jumlahharitunggakan",
+    "kualitas",
+    "kualitasket",
+    "kondisi",
+  ];
+
+  const findFirstValueByKey = (value, targetKeys) => {
+    if (!value) return "";
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const found = findFirstValueByKey(item, targetKeys);
+        if (found !== "") return found;
+      }
+      return "";
+    }
+    if (typeof value !== "object") return "";
+    for (const [key, child] of Object.entries(value)) {
+      const normalized = normalizeKey(key);
+      if (targetKeys.includes(normalized)) {
+        const raw = child ?? "";
+        if (String(raw).trim() !== "") return String(raw).trim();
+      }
+      const found = findFirstValueByKey(child, targetKeys);
+      if (found !== "") return found;
+    }
+    return "";
+  };
+
+  const collectNormalizedKeys = (value, keySet) => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      value.forEach((item) => collectNormalizedKeys(item, keySet));
+      return;
+    }
+    if (typeof value !== "object") return;
+    Object.entries(value).forEach(([key, child]) => {
+      keySet.add(normalizeKey(key));
+      if (child && typeof child === "object") {
+        collectNormalizedKeys(child, keySet);
+      }
+    });
+  };
+
+  const collectObjectArrays = (value, arrays) => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      const objectItems = value.filter(
+        (item) => item && typeof item === "object" && !Array.isArray(item)
+      );
+      if (objectItems.length) {
+        arrays.push(objectItems);
+      }
+      value.forEach((item) => collectObjectArrays(item, arrays));
+      return;
+    }
+    if (typeof value !== "object") return;
+    Object.values(value).forEach((child) =>
+      collectObjectArrays(child, arrays)
+    );
+  };
+
+  const extractRowsFromJson = (jsonData) => {
+    const arrays = [];
+    collectObjectArrays(jsonData, arrays);
+
+    let bestRows = [];
+    let bestScore = 0;
+    let bestLength = 0;
+
+    arrays.forEach((rows) => {
+      const keySet = new Set();
+      rows.forEach((row) => collectNormalizedKeys(row, keySet));
+      const score = expectedKeys.filter((key) => keySet.has(key)).length;
+      if (score > bestScore || (score === bestScore && rows.length > bestLength)) {
+        bestRows = rows;
+        bestScore = score;
+        bestLength = rows.length;
+      }
+    });
+
+    if (bestScore > 0) return bestRows;
+
+    if (jsonData && typeof jsonData === "object" && !Array.isArray(jsonData)) {
+      const keySet = new Set();
+      collectNormalizedKeys(jsonData, keySet);
+      const score = expectedKeys.filter((key) => keySet.has(key)).length;
+      if (score > 0) return [jsonData];
+    }
+
+    return [];
+  };
+
+  if (trimmedText.startsWith("{") || trimmedText.startsWith("[")) {
+    try {
+      const jsonData = JSON.parse(trimmedText);
+      const jsonRows = extractRowsFromJson(jsonData);
+      if (jsonRows.length) {
+        const namaDebitur = findFirstValueByKey(jsonData, ["namadebitur"]);
+        return {
+          headers: [],
+          rows: jsonRows,
+          meta: namaDebitur ? { namaDebitur } : {},
+        };
+      }
+    } catch {
+      // Fall through to delimited parsing.
+    }
+  }
+
+  const lines = String(text)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!lines.length) {
+    return { headers: [], rows: [] };
+  }
+
+  const delimiters = [",", ";", "\t", "|"];
+  const firstLine = lines[0];
+  let delimiter = "";
+  let maxCount = 0;
+
+  delimiters.forEach((delim) => {
+    const count = firstLine.split(delim).length - 1;
+    if (count > maxCount) {
+      maxCount = count;
+      delimiter = delim;
+    }
+  });
+
+  if (!delimiter) {
+    return {
+      headers: ["Data SLIK"],
+      rows: lines.map((line) => [line]),
+    };
+  }
+
+  const rows = lines.map((line) =>
+    line.split(delimiter).map((cell) => cell.trim())
+  );
+  const firstRow = rows[0];
+  const looksLikeHeader = firstRow.some((cell) => /[A-Za-z]/.test(cell));
+
+  if (looksLikeHeader && rows.length > 1) {
+    return { headers: firstRow, rows: rows.slice(1) };
+  }
+
+  return {
+    headers: firstRow.map((_, index) => `Kolom ${index + 1}`),
+    rows,
+  };
+};
+
+const buildSlikEntriesFromDataDiri = (record) => {
+  if (!record) return [];
+  const entries = [];
+  const nasabahText = getSlikTextValue(record);
+  if (nasabahText) {
+    entries.push({
+      index: 0,
+      fileName: getSlikFileNameValue(record),
+      table: parseSlikText(nasabahText),
+      source: "diri",
+    });
+  }
+  const penanggungText = getSlikTextValuePenanggung(record);
+  if (penanggungText) {
+    entries.push({
+      index: entries.length,
+      fileName: getSlikFileNameValuePenanggung(record),
+      table: parseSlikText(penanggungText),
+      source: "penanggung",
+    });
+  }
+  return entries;
 };
 
 const normalizeSlikKey = (value) =>
@@ -904,6 +1266,7 @@ export default function PrintPDF() {
     kdpegawai: "",
   });
   const [pengusulName, setPengusulName] = useState("");
+  const [pemeriksaName, setPemeriksaName] = useState("");
   const [pemutusName, setPemutusName] = useState("");
   const [pengusulKantor, setPengusulKantor] = useState("");
   const [loading, setLoading] = useState(true);
@@ -921,6 +1284,7 @@ export default function PrintPDF() {
   const measurePageRef = useRef(null);
   const measureHeaderRef = useRef(null);
   const measureIntroRef = useRef(null);
+  const measureDataDiriUploadsRef = useRef(null);
   const measureUsahaUploadsRef = useRef(null);
   const measureAnalisa5CRef = useRef(null);
   const measureAnalisaDetailRefs = useRef([]);
@@ -1182,58 +1546,18 @@ export default function PrintPDF() {
   }, [no_permohonan]);
 
   const handleDownload = async () => {
-    if (!contentRef.current) return;
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
-      import("html2canvas"),
-      import("jspdf"),
-    ]);
-
-    const pages = Array.from(
-      contentRef.current.querySelectorAll(".pdf-page")
-    );
-    if (!pages.length) return;
-
-    const pdf = new jsPDF({
-      unit: "mm",
-      format: "a4",
-      orientation: "portrait",
-    });
-    const pdfWidth = pdf.internal.pageSize.getWidth();
-    const pdfHeight = pdf.internal.pageSize.getHeight();
-
-    for (let index = 0; index < pages.length; index += 1) {
-      const page = pages[index];
-      const canvas = await html2canvas(page, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: "#ffffff",
-      });
-      const imgData = canvas.toDataURL("image/png");
-      const scale = Math.min(
-        pdfWidth / canvas.width,
-        pdfHeight / canvas.height
-      );
-      const renderWidth = canvas.width * scale;
-      const renderHeight = canvas.height * scale;
-      const offsetX = (pdfWidth - renderWidth) / 2;
-      const offsetY = (pdfHeight - renderHeight) / 2;
-
-      pdf.addImage(
-        imgData,
-        "PNG",
-        offsetX,
-        offsetY,
-        renderWidth,
-        renderHeight
-      );
-      if (index < pages.length - 1) {
-        pdf.addPage();
-      }
+    const nikValue = getFieldValue(reportData?.dataDiri, ["nik", "NIK"]);
+    const safePermohonan = String(no_permohonan || "").replace(/[^\w-]/g, "_");
+    const safeNik = String(nikValue || "").replace(/[^\w-]/g, "_");
+    const nextTitle = [safePermohonan, safeNik].filter(Boolean).join("_");
+    const previousTitle = document.title;
+    if (nextTitle) {
+      document.title = nextTitle;
     }
-
-    pdf.save(`Nota-Analisa-${no_permohonan}.pdf`);
+    window.print();
+    setTimeout(() => {
+      document.title = previousTitle;
+    }, 0);
   };
 
   const permohonan = reportData.permohonan || {};
@@ -1293,6 +1617,30 @@ export default function PrintPDF() {
     };
 
     loadPemutusName();
+
+    return () => {
+      isActive = false;
+    };
+  }, [pengusulKantor, permohonanDetail, permohonan, dataPermohonan]);
+
+  useEffect(() => {
+    let isActive = true;
+    const loadPemeriksaName = async () => {
+      const kantorValue =
+        pengusulKantor ||
+        getFieldValue(permohonanDetail, KODE_KANTOR_KEYS) ||
+        getFieldValue(permohonan, KODE_KANTOR_KEYS) ||
+        getFieldValue(dataPermohonan, KODE_KANTOR_KEYS);
+      if (!kantorValue) {
+        setPemeriksaName("");
+        return;
+      }
+      const fetchedName = await fetchPenyeliaNameByKantor(kantorValue);
+      if (!isActive) return;
+      setPemeriksaName(fetchedName || "");
+    };
+
+    loadPemeriksaName();
 
     return () => {
       isActive = false;
@@ -1548,6 +1896,16 @@ export default function PrintPDF() {
     }
     return API_ENDPOINTS.uploads(trimmed);
   };
+  const permohonanCaraAngsuranKredit = getFieldValue(dataPermohonan, [
+    "caraAngsuranKredit",
+    "cara_angsuran_kredit",
+  ]);
+  const permohonanSistemAngsuranKredit = getFieldValue(dataPermohonan, [
+    "sistemAngsuranKredit",
+    "sistem_angsuran_kredit",
+    "sistemAngsuran",
+    "sistem_angsuran",
+  ]);
   const dataAnalisisFields = {
     jenisKredit: getFieldValue(dataAnalisis, [
       "jenisKredit",
@@ -1709,6 +2067,21 @@ export default function PrintPDF() {
       ["perhitunganBunga", "perhitungan_bunga"],
       dataPermohonan.perhitunganBunga
     ),
+    caraAngsuranKredit: getFieldValue(
+      dataAnalisis,
+      ["caraAngsuranKredit", "cara_angsuran_kredit"],
+      permohonanCaraAngsuranKredit
+    ),
+    sistemAngsuranKredit: getFieldValue(
+      dataAnalisis,
+      [
+        "sistemAngsuranKredit",
+        "sistem_angsuran_kredit",
+        "sistemAngsuran",
+        "sistem_angsuran",
+      ],
+      permohonanSistemAngsuranKredit
+    ),
     sukuBungaTahun: getFieldValue(
       dataAnalisis,
       ["sukuBungaTahun", "suku_bunga_tahun"],
@@ -1819,11 +2192,46 @@ export default function PrintPDF() {
     "";
   const isKreditKonsumtif = isKreditKonsumtifPegawai(jenisKreditValue);
   const isKreditModalKerja = isKreditModalKerjaType(jenisKreditValue);
+  const caraAngsuranLabel = dataAnalisisFields.caraAngsuranKredit;
+  const sistemAngsuranLabel = dataAnalisisFields.sistemAngsuranKredit;
+  const angsuranSummary = buildAngsuranSummary(
+    caraAngsuranLabel,
+    sistemAngsuranLabel
+  );
+  const isKreditMusiman = isKreditMusimanAngsuran(caraAngsuranLabel);
+  const angsuranSummaryLabel = angsuranSummary
+    ? `${angsuranSummary}${isKreditMusiman ? " (Kredit Musiman)" : ""}`
+    : isKreditMusiman
+    ? "Kredit Musiman"
+    : "";
+  const angsuranDisplay = buildAngsuranDisplay({
+    jangkaWaktuKredit: dataAnalisisFields.jangkaWaktuKredit,
+    plafonPermohonan: dataAnalisisFields.plafonPermohonan,
+    pokokPerBulan: dataAnalisisFields.pokokPerBulan,
+    totalBungaPerbulan: dataAnalisisFields.totalBungaPerbulan,
+    caraAngsuranKredit: dataAnalisisFields.caraAngsuranKredit,
+    sistemAngsuranKredit: dataAnalisisFields.sistemAngsuranKredit,
+  });
   const dataUsahaUploads = {
     fotoNIB: getFieldValue(dataUsaha, ["fotoNIB", "foto_nib", "fotonib"]),
     fotoNPWP: getFieldValue(dataUsaha, ["fotoNPWP", "foto_npwp", "fotonpwp"]),
     fotoSKU: getFieldValue(dataUsaha, ["fotoSKU", "foto_sku", "fotosku"]),
     fotodepan: getFieldValue(dataUsaha, ["fotodepan", "foto_depan", "fotoDepan"]),
+  };
+  const dataDiriUploads = {
+    fotoKTP: getFieldValue(dataDiri, ["fotoKTP", "foto_ktp", "fotoKtp"]),
+    selfieKTP: getFieldValue(dataDiri, [
+      "selfieKTP",
+      "selfie_ktp",
+      "selfieKtp",
+    ]),
+    fotoKTPPenanggungJawab: getFieldValue(dataDiri, [
+      "fotoKTPPenanggungJawab",
+      "fotoKTPPasangan",
+      "fotoKtpPasangan",
+      "foto_ktp_penanggung_jawab",
+      "foto_ktp_pasangan",
+    ]),
   };
   const usahaUploadItems = [
     { key: "fotoNIB", label: "Foto NIB", value: dataUsahaUploads.fotoNIB },
@@ -1837,6 +2245,30 @@ export default function PrintPDF() {
   ]
     .map((item) => ({ ...item, value: String(item.value ?? "").trim() }))
     .filter((item) => item.value);
+  const dataDiriUploadItems = [
+    { key: "fotoKTP", label: "Foto KTP Pemohon", value: dataDiriUploads.fotoKTP },
+    {
+      key: "selfieKTP",
+      label: "Selfie KTP Pemohon",
+      value: dataDiriUploads.selfieKTP,
+    },
+    {
+      key: "fotoKTPPenanggungJawab",
+      label: "Foto KTP Penanggung Jawab",
+      value: dataDiriUploads.fotoKTPPenanggungJawab,
+    },
+  ]
+    .map((item) => ({ ...item, value: String(item.value ?? "").trim() }))
+    .filter((item) => item.value);
+  const dataDiriUploadRows = dataDiriUploadItems.reduce((rows, item, index) => {
+    if (index % 2 === 0) {
+      rows.push([item]);
+      return rows;
+    }
+    rows[rows.length - 1].push(item);
+    return rows;
+  }, []);
+  const showDataDiriUploads = dataDiriUploadItems.length > 0;
   const showUsahaUploads = !isKreditKonsumtif && usahaUploadItems.length > 0;
   const capitalOptionSet = isKreditKonsumtif
     ? CAPITAL_OPTION_LABELS.konsumtif
@@ -1900,9 +2332,7 @@ export default function PrintPDF() {
         dataAnalisisFields.statusLokasiUsaha,
         dataAnalisisFields.ketergantunganTerhadapMusim,
       ];
-  const slikEntries = no_permohonan
-    ? readSlikStorageEntries(no_permohonan)
-    : [];
+  const slikEntries = buildSlikEntriesFromDataDiri(dataDiri);
   const slikSummary = computeSlikSummary(slikEntries);
   const slikGradeLabel = String(slikSummary.gradeLabel ?? "").trim();
   const statusSlikLabel = String(slikSummary.statusSlik ?? "").trim();
@@ -2064,7 +2494,7 @@ export default function PrintPDF() {
   const analisa5CSection = (
     <div className="md:col-span-2">
       <CompactSectionTitle>V. Analisa 5C</CompactSectionTitle>
-      <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-4 print-grid-3">
         <div className="space-y-1">
           <p className="text-[11px] font-semibold text-slate-700">Character</p>
           {characterAnswers.map((item) => (
@@ -2203,6 +2633,7 @@ export default function PrintPDF() {
   const namaPemutusLabel = isKomiteCabang
     ? pemutusName || userInfo.namaLengkap || namaPemutusValue || "-"
     : pemutusName || namaPemutusValue || "-";
+  const namaPemeriksaLabel = pemeriksaName || "-";
   const tempatTanggalLahir = formatTempatTanggal(
     dataDiriFields.tempatLahir,
     dataDiriFields.tanggalLahir
@@ -2239,9 +2670,9 @@ export default function PrintPDF() {
           : ""
       }`
     : "-";
-  const jangkaWaktuLabel = dataPermohonan.jangkaWaktuKredit
-    ? `${dataPermohonan.jangkaWaktuKredit} bulan`
-    : "-";
+  const jangkaWaktuLabel = buildJangkaWaktuLabel(
+    dataPermohonan.jangkaWaktuKredit
+  );
   const hppLabel =
     HPP_LABELS[String(dataAnalisisFields.jenisHPP ?? "").trim()] ||
     dataAnalisisFields.jenisHPP;
@@ -2344,13 +2775,25 @@ export default function PrintPDF() {
     },
     {
       label: "Jangka Waktu Kredit",
-      value: dataAnalisisFields.jangkaWaktuKredit
-        ? `${formatIdInteger(dataAnalisisFields.jangkaWaktuKredit)} bulan`
-        : "",
+      value: buildJangkaWaktuLabel(dataAnalisisFields.jangkaWaktuKredit),
     },
     {
       label: "Cara Perhitungan",
       value: dataAnalisisFields.perhitunganBunga,
+    },
+    {
+      label: "Jumlah Periode Pembayaran",
+      value: angsuranDisplay.periodCount
+        ? `${formatIdInteger(angsuranDisplay.periodCount)} kali`
+        : "-",
+    },
+    {
+      label: "Cara Angsuran Kredit",
+      value: caraAngsuranLabel,
+    },
+    {
+      label: "Sistem Angsuran Kredit",
+      value: angsuranSummaryLabel || sistemAngsuranLabel,
     },
     {
       label: "Suku Bunga / Tahun",
@@ -2379,14 +2822,14 @@ export default function PrintPDF() {
       value: formatRupiahValue(dataAnalisisFields.totalBungaPerbulan, true),
     },
     {
-      label: "Angsuran Pembiayaan",
-      value: formatRupiahValue(dataAnalisisFields.angsuranPembiayaan, true),
+      label: angsuranDisplay.label,
+      value: angsuranDisplay.value,
     },
   ];
   const kemampuanRows = [
     {
-      label: "Angsuran Pembiayaan",
-      value: formatRupiahValue(dataAnalisisFields.angsuranPembiayaan, true),
+      label: angsuranDisplay.label,
+      value: angsuranDisplay.value,
     },
     {
       label: "Besar Angsuran dari MPK",
@@ -2490,7 +2933,7 @@ export default function PrintPDF() {
     {
       key: "analisa-detail-row-1",
       content: (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 print-grid-2">
           {pendapatanSection}
           {pembiayaanSection}
         </div>
@@ -2499,7 +2942,7 @@ export default function PrintPDF() {
     {
       key: "analisa-detail-row-2",
       content: (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 print-grid-2">
           {kemampuanSection}
           {usulanSection}
         </div>
@@ -2638,7 +3081,7 @@ export default function PrintPDF() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-b border-slate-200 pb-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-b border-slate-200 pb-3 print-grid-2">
         <div className="space-y-1">
           <InfoRow label="Cabang" value={namaBank} />
           <InfoRow label="Status Aplikasi" value={statusAplikasiLabel} />
@@ -2648,11 +3091,12 @@ export default function PrintPDF() {
         </div>
         <div className="space-y-1">
           <InfoRow label="Nama Pengusul" value={namaPengusulLabel} />
+          <InfoRow label="Nama Pemeriksa" value={namaPemeriksaLabel} />
           <InfoRow label="Nama Pemutus" value={namaPemutusLabel} />
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 print-grid-2">
         <div>
           <CompactSectionTitle>I. Data Permohonan</CompactSectionTitle>
           <div className="mt-2 space-y-1">
@@ -2670,10 +3114,6 @@ export default function PrintPDF() {
             />
             <InfoRow label="Suku Bunga" value={sukuBungaLabel} />
             <InfoRow label="Jangka Waktu" value={jangkaWaktuLabel} />
-            <InfoRow
-              label="Jenis Permohonan"
-              value={dataPermohonanFields.jenisPermohonan}
-            />
             <InfoRow
               label="Tujuan Penggunaan"
               value={dataPermohonanFields.tujuanPenggunaan}
@@ -2773,6 +3213,33 @@ export default function PrintPDF() {
       </div>
     </div>
   );
+  const dataDiriUploadsSection = showDataDiriUploads ? (
+    <div>
+      <CompactSectionTitle>Lampiran Data Diri</CompactSectionTitle>
+      <div className="mt-2 space-y-3">
+        {dataDiriUploadRows.map((row, rowIndex) => (
+          <div key={`data-diri-row-${rowIndex}`} className="flex gap-3">
+            {row.map((item) => (
+              <div key={item.key} className="w-1/2 space-y-1">
+                <p className="text-[10px] font-semibold text-slate-600">
+                  {item.label}
+                </p>
+                <div className="rounded-md bg-white p-1 h-28 flex items-center justify-center">
+                  <img
+                    src={buildUploadUrl(item.value)}
+                    alt={item.label}
+                    className="max-h-full max-w-full h-auto w-auto object-contain"
+                    crossOrigin="anonymous"
+                    loading="eager"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  ) : null;
   const usahaUploadsSection = showUsahaUploads ? (
     <div>
       <CompactSectionTitle>Lampiran Data Usaha</CompactSectionTitle>
@@ -2782,7 +3249,7 @@ export default function PrintPDF() {
             <p className="text-[10px] font-semibold text-slate-600">
               {item.label}
             </p>
-            <div className="border border-slate-300 rounded-md bg-white p-1">
+            <div className="rounded-md bg-white p-1">
               <img
                 src={buildUploadUrl(item.value)}
                 alt={item.label}
@@ -2814,27 +3281,47 @@ export default function PrintPDF() {
     : keputusanTanggalLabel || "-";
   const keputusanJenisKreditLabel =
     formatJenisKreditLabel(jenisKreditValue) || "-";
-  const keputusanPlafonLabel = hasInputValue(dataAnalisisFields.plafonPermohonan)
-    ? formatRupiah(dataAnalisisFields.plafonPermohonan)
-    : formatRupiah(dataPermohonan.plafonPermohonan);
+  const penyeliaPlafonValue = getFieldValue(permohonanDetail, [
+    "plafonPermohonanPenyelia",
+    "plafon_permohonan_penyelia",
+  ]);
+  const keputusanPlafonValue = hasInputValue(penyeliaPlafonValue)
+    ? penyeliaPlafonValue
+    : hasInputValue(dataAnalisisFields.plafonPermohonan)
+    ? dataAnalisisFields.plafonPermohonan
+    : dataPermohonan.plafonPermohonan;
+  const keputusanPlafonLabel = formatRupiah(keputusanPlafonValue);
   const keputusanJangkaWaktuLabel = dataAnalisisFields.jangkaWaktuKredit
-    ? `${formatIdInteger(dataAnalisisFields.jangkaWaktuKredit)} Bulan`
+    ? buildJangkaWaktuLabel(dataAnalisisFields.jangkaWaktuKredit)
     : jangkaWaktuLabel || "-";
-  const sukuBungaValue = toNumber(dataPermohonan.sukuBungaTahun);
-  const keputusanSukuBungaLabel = hasInputValue(dataPermohonan.sukuBungaTahun)
+  const penyeliaSukuBungaValue = getFieldValue(permohonanDetail, [
+    "sukuBungaPenyelia",
+    "suku_bunga_penyelia",
+  ]);
+  const penyeliaJenisPerhitunganValue = getFieldValue(permohonanDetail, [
+    "jenisPerhitunganPenyelia",
+    "jenis_perhitungan_penyelia",
+  ]);
+  const keputusanSukuBungaValue = hasInputValue(penyeliaSukuBungaValue)
+    ? penyeliaSukuBungaValue
+    : dataPermohonan.sukuBungaTahun;
+  const keputusanJenisPerhitunganValue = hasInputValue(
+    penyeliaJenisPerhitunganValue
+  )
+    ? penyeliaJenisPerhitunganValue
+    : dataPermohonan.perhitunganBunga;
+  const sukuBungaValue = toNumber(keputusanSukuBungaValue);
+  const keputusanSukuBungaLabel = hasInputValue(keputusanSukuBungaValue)
     ? `${Number.isInteger(sukuBungaValue)
         ? formatIdInteger(sukuBungaValue)
         : formatIdNumber(sukuBungaValue)
       } % per tahun${
-        dataPermohonan.perhitunganBunga
-          ? ` (${dataPermohonan.perhitunganBunga})`
+        keputusanJenisPerhitunganValue
+          ? ` (${keputusanJenisPerhitunganValue})`
           : ""
       }`
     : "-";
-  const keputusanAngsuranLabel = formatRupiahValue(
-    dataAnalisisFields.angsuranPembiayaan,
-    true
-  );
+  const keputusanAngsuranLabel = angsuranDisplay.value;
   const keteranganPengajuanLabel =
     getFieldValue(permohonanDetail, [
       "keteranganPengajuan",
@@ -2861,36 +3348,6 @@ export default function PrintPDF() {
       "keterangan",
     ]) ||
     dataAnalisisFields.catatanPengajuan;
-  const namaAsuransiLabel =
-    getFieldValue(permohonanDetail, ["namaAsuransi", "nama_asuransi"]) ||
-    getFieldValue(dataPermohonan, ["namaAsuransi", "nama_asuransi"]);
-  const premiValue =
-    getFieldValue(permohonanDetail, [
-      "premi",
-      "premiAsuransi",
-      "premi_asuransi",
-    ]) ||
-    getFieldValue(dataPermohonan, [
-      "premi",
-      "premiAsuransi",
-      "premi_asuransi",
-    ]);
-  const premiLabel = formatRupiahValue(premiValue, true);
-  const namaNotarisLabel =
-    getFieldValue(permohonanDetail, ["namaNotaris", "nama_notaris"]) ||
-    getFieldValue(dataPermohonan, ["namaNotaris", "nama_notaris"]);
-  const biayaAphtValue =
-    getFieldValue(permohonanDetail, [
-      "biayaAPHT",
-      "biaya_apht",
-      "biayaApht",
-    ]) ||
-    getFieldValue(dataPermohonan, [
-      "biayaAPHT",
-      "biaya_apht",
-      "biayaApht",
-    ]);
-  const biayaAphtLabel = formatRupiahValue(biayaAphtValue, true);
   const statusPermohonanRaw = getFieldValue(permohonanDetail, [
     "statusPermohonan",
     "status_permohonan",
@@ -2962,12 +3419,9 @@ export default function PrintPDF() {
           <li>Plafon Kredit: {keputusanPlafonLabel || "-"}</li>
           <li>Jangka Waktu: {keputusanJangkaWaktuLabel}</li>
           <li>Suku Bunga: {keputusanSukuBungaLabel}</li>
-          <li>Angsuran per Bulan: {keputusanAngsuranLabel || "-"}</li>
+          <li>Sistem Angsuran: {angsuranSummaryLabel || "-"}</li>
+          <li>{angsuranDisplay.label}: {keputusanAngsuranLabel || "-"}</li>
           <li>Keterangan: {keteranganPengajuanLabel || "-"}</li>
-          <li>Nama Asuransi: {namaAsuransiLabel || "-"}</li>
-          <li>Premi: {premiLabel || "-"}</li>
-          <li>Nama Notaris: {namaNotarisLabel || "-"}</li>
-          <li>Biaya APHT: {biayaAphtLabel || "-"}</li>
           <li>Status Permohonan: {statusPermohonanLabel || "-"}</li>
           <li>Status Pengajuan: {statusPengajuanLabel || "-"}</li>
         </ul>
@@ -3033,6 +3487,9 @@ export default function PrintPDF() {
     };
 
     const introHeight = getOuterHeight(measureIntroRef.current);
+    const dataDiriUploadsHeight = getOuterHeight(
+      measureDataDiriUploadsRef.current
+    );
     const usahaUploadsHeight = getOuterHeight(measureUsahaUploadsRef.current);
     const analisa5CHeight = getOuterHeight(measureAnalisa5CRef.current);
     const analisaDetailHeights = analisaDetailRows.map((_, index) =>
@@ -3068,6 +3525,9 @@ export default function PrintPDF() {
         rowIndex: index,
       });
     });
+    if (dataDiriUploadsHeight) {
+      blocks.push({ type: "dataDiriUploads", height: dataDiriUploadsHeight });
+    }
     if (usahaUploadsHeight) {
       blocks.push({ type: "usahaUploads", height: usahaUploadsHeight });
     }
@@ -3102,22 +3562,29 @@ export default function PrintPDF() {
         return analisa5CSection;
       case "analisaDetailRow":
         return analisaDetailRows[block.rowIndex]?.content ?? null;
+      case "dataDiriUploads":
+        return dataDiriUploadsSection;
       case "usahaUploads":
         return usahaUploadsSection;
       default:
         return null;
     }
   };
+  const printablePageBlocks = pageBlocks.filter((blocks) => blocks.length);
 
   return (
     <PageBackground>
-      <Sidebar />
+      <div className="no-print">
+        <Sidebar />
+      </div>
 
       <div className="md:ml-64">
-        <Header />
+        <div className="no-print">
+          <Header />
+        </div>
 
         <main className="pt-20 px-4 sm:px-6 pb-16 max-w-6xl mx-auto">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+          <div className="no-print flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
             <div className="flex items-start gap-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-100 text-blue-600">
                 <FaBriefcase className="text-lg" />
@@ -3148,13 +3615,23 @@ export default function PrintPDF() {
           </div>
 
           {loading ? (
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 text-sm text-slate-500">
-              Memuat data...
+            <div className="bg-white rounded-2xl border border-slate-200 p-6">
+              <div className="min-h-[50vh] flex flex-col items-center justify-center text-center">
+                <img
+                  src="/bpr.png"
+                  alt="Logo BPR"
+                  className="h-16 w-16 object-contain"
+                />
+                <p className="mt-2 text-sm font-semibold text-slate-600">
+                  Mohon ditunggu...
+                </p>
+              </div>
             </div>
           ) : (
             <>
               <div
                 aria-hidden="true"
+                className="no-print"
                 style={{
                   position: "fixed",
                   top: "-10000px",
@@ -3203,6 +3680,11 @@ export default function PrintPDF() {
                       {row.content}
                     </div>
                   ))}
+                  {showDataDiriUploads ? (
+                    <div ref={measureDataDiriUploadsRef}>
+                      {dataDiriUploadsSection}
+                    </div>
+                  ) : null}
                   {showUsahaUploads ? (
                     <div ref={measureUsahaUploadsRef}>
                       {usahaUploadsSection}
@@ -3246,10 +3728,50 @@ export default function PrintPDF() {
                       size: A4 portrait;
                       margin: 0;
                     }
+
+                    @media print {
+                      body {
+                        -webkit-print-color-adjust: exact;
+                        print-color-adjust: exact;
+                      }
+                      .no-print {
+                        display: none !important;
+                      }
+                      .md\\:ml-64 {
+                        margin-left: 0 !important;
+                      }
+                      main {
+                        padding: 0 !important;
+                      }
+                      .print-grid-2 {
+                        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+                      }
+                      .print-grid-3 {
+                        grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+                      }
+                      .pdf-container > * + * {
+                        margin-top: 0 !important;
+                      }
+                      .pdf-container {
+                        padding: 0;
+                      }
+                      .pdf-page {
+                        box-shadow: none;
+                        margin: 0 auto;
+                        padding-top: 8mm;
+                        padding-bottom: 10mm;
+                        break-after: page;
+                        page-break-after: always;
+                      }
+                      .pdf-page:last-child {
+                        break-after: auto;
+                        page-break-after: auto;
+                      }
+                    }
                   `}
                 </style>
 
-                {pageBlocks.map((blocks, pageIndex) => (
+                {printablePageBlocks.map((blocks, pageIndex) => (
                   <div key={`pdf-page-${pageIndex}`} className="pdf-page space-y-4">
                     <PageHeader
                       namaBank={namaBank}
@@ -3265,12 +3787,12 @@ export default function PrintPDF() {
                     ))}
                   </div>
                 ))}
-                {pageBlocks.length ? (
+                {printablePageBlocks.length ? (
                   <div className="pdf-page space-y-4 surat-page">
                     <PageHeader
                       namaBank={namaBank}
                       noPermohonan={no_permohonan}
-                      pageNumber={pageBlocks.length + 1}
+                      pageNumber={printablePageBlocks.length + 1}
                       alamatKantor={alamatKantorLabel}
                       telpKantor={telpKantorLabel}
                       hidePageNumber

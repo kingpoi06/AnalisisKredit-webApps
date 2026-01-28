@@ -117,7 +117,16 @@ useEffect(() => {
           </div>
 
           {loading ? (
-            <div className="text-center py-20 text-gray-500 font-semibold">Loading data...</div>
+            <div className="flex flex-col items-center justify-center py-20 text-center">
+              <img
+                src="/bpr.png"
+                alt="Logo BPR"
+                className="h-16 w-16 object-contain"
+              />
+              <p className="mt-2 text-sm font-semibold text-gray-600">
+                Mohon ditunggu...
+              </p>
+            </div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 

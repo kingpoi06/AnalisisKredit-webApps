@@ -121,6 +121,7 @@ const createEmptyJaminan = () => ({
   slikTable: { headers: [], rows: [] },
   slikFileName: "",
 
+  namaPemilikSertifikat: "",
   jenisSertifikat: "",
   noSertifikat: "",
   letak: "",
@@ -163,6 +164,8 @@ const createEmptyJaminan = () => ({
   saldoTabunganDiblokirSebesarPlafon: "",
   noRekening: "",
 });
+
+const MAX_AGUNAN_FILE_SIZE = 30 * 1024 * 1024;
 
 const normalizeKey = (key) => String(key).replace(/_/g, "").toLowerCase();
 
@@ -256,9 +259,19 @@ export default function UpdateDataJaminan() {
     return formatTwoDecimals(toNumber(nilaiPasar) * safeMargin);
   };
 
+  const getBpkbMargin = (pengikatanValue) => {
+    const normalized = String(pengikatanValue ?? "")
+      .toUpperCase()
+      .replace(/[^A-Z]/g, "");
+    if (normalized === "FIDUSIA") return 0.5;
+    if (normalized === "NONFIDUSIA") return 0;
+    return 0.5;
+  };
+
   const getSertifikatMargin = (statusPengikatan) => {
-    if (statusPengikatan === "SKMHT") return 0.6;
-    if (statusPengikatan === "APHT") return 0.8;
+    const normalized = String(statusPengikatan ?? "").toUpperCase();
+    if (normalized === "SKMHT") return 0.6;
+    if (normalized === "APHT") return 0.8;
     return 0.8;
   };
 
@@ -346,13 +359,21 @@ const normalizeJaminanItem = (item) => {
     "Deposito",
     "Kredit",
   ]);
+  mapped.pengikatan = normalizeChoice(mapped.pengikatan, [
+    "Fidusia",
+    "Non Fidusia",
+  ]);
 
   mapped.slik = null;
   mapped.slikTable = { headers: [], rows: [] };
   mapped.dokumentasiAgunan = null;
 
     if (mapped.jenisjaminan === "BPKB") {
-      mapped.safetyMargin = mapped.safetyMargin || "50";
+      if (!mapped.pengikatan) {
+        mapped.pengikatan = "Fidusia";
+      }
+      const margin = getBpkbMargin(mapped.pengikatan);
+      mapped.safetyMargin = String(Math.round(margin * 100));
       if (
         mapped.nilaiLikuidasi === "" ||
         mapped.nilaiLikuidasi === null ||
@@ -360,7 +381,7 @@ const normalizeJaminanItem = (item) => {
       ) {
         mapped.nilaiLikuidasi = computeNilaiLikuidasi(
           mapped.rerataNilaiPasar,
-          0.5
+          margin
         );
       }
     }
@@ -632,6 +653,15 @@ const normalizeJaminanItem = (item) => {
         slikFileName: file.name,
       });
       saveSlikStorageEntry(index, table, file.name);
+      Swal.fire({
+        toast: true,
+        position: "top-end",
+        icon: "success",
+        title: "File SLIK berhasil disimpan",
+        showConfirmButton: false,
+        timer: 1200,
+        timerProgressBar: true,
+      });
     };
     reader.onerror = () => {
       Swal.fire("Error", "Gagal membaca file SLIK", "error");
@@ -821,10 +851,14 @@ const normalizeJaminanItem = (item) => {
     if (field === "jenisjaminan") {
       const updates = { jenisjaminan: value };
       if (value === "BPKB") {
-        updates.safetyMargin = "50";
+        const pengikatanValue =
+          jaminanList[index]?.pengikatan || "Fidusia";
+        const margin = getBpkbMargin(pengikatanValue);
+        updates.pengikatan = pengikatanValue;
+        updates.safetyMargin = String(Math.round(margin * 100));
         updates.nilaiLikuidasi = computeNilaiLikuidasi(
           jaminanList[index]?.rerataNilaiPasar,
-          0.5
+          margin
         );
       }
       if (value === "Sertifikat") {
@@ -843,6 +877,20 @@ const normalizeJaminanItem = (item) => {
       }
       if (value === "Deposito") {
         updates.buktiHakMilik = "Bilyet Deposito";
+      }
+      updateJaminan(index, updates);
+      return;
+    }
+
+    if (field === "pengikatan") {
+      const updates = { pengikatan: value };
+      if (jaminanList[index]?.jenisjaminan === "BPKB") {
+        const margin = getBpkbMargin(value);
+        updates.safetyMargin = String(Math.round(margin * 100));
+        updates.nilaiLikuidasi = computeNilaiLikuidasi(
+          jaminanList[index]?.rerataNilaiPasar,
+          margin
+        );
       }
       updateJaminan(index, updates);
       return;
@@ -896,6 +944,15 @@ const normalizeJaminanItem = (item) => {
     const njopFields = new Set(["nilaiNJOPTanah", "nilaiNJOPBangunan"]);
 
     if (field === "rerataNilaiPasar") {
+      if (jaminanList[index]?.jenisjaminan === "BPKB") {
+        const margin = getBpkbMargin(jaminanList[index]?.pengikatan);
+        updateJaminan(index, {
+          rerataNilaiPasar: cleanedValue,
+          safetyMargin: String(Math.round(margin * 100)),
+          nilaiLikuidasi: computeNilaiLikuidasi(cleanedValue, margin),
+        });
+        return;
+      }
       updateJaminan(index, {
         rerataNilaiPasar: cleanedValue,
         safetyMargin: "50",
@@ -935,7 +992,35 @@ const normalizeJaminanItem = (item) => {
 
   const handleFileChange = (index) => (e) => {
     const file = e.target.files?.[0] || null;
+    if (!file) {
+      updateJaminan(index, { dokumentasiAgunan: null });
+      return;
+    }
+    const isPdf =
+      file.type === "application/pdf" ||
+      file.name.toLowerCase().endsWith(".pdf");
+    if (!isPdf) {
+      e.target.value = "";
+      updateJaminan(index, { dokumentasiAgunan: null });
+      Swal.fire("Gagal", "Dokumen agunan harus berformat PDF.", "error");
+      return;
+    }
+    if (file.size > MAX_AGUNAN_FILE_SIZE) {
+      e.target.value = "";
+      updateJaminan(index, { dokumentasiAgunan: null });
+      Swal.fire("Gagal", "Ukuran file maksimal 30MB.", "error");
+      return;
+    }
     updateJaminan(index, { dokumentasiAgunan: file });
+    Swal.fire({
+      toast: true,
+      position: "top-end",
+      icon: "success",
+      title: "File berhasil disimpan",
+      showConfirmButton: false,
+      timer: 1200,
+      timerProgressBar: true,
+    });
   };
 
   const renderSlikTable = (slikTable, meta = {}) => {
@@ -1430,9 +1515,11 @@ const normalizeJaminanItem = (item) => {
           ...dataToSend
         } = item;
         if (item.jenisjaminan === "BPKB") {
-          dataToSend.safetyMargin = "50";
+          const margin = getBpkbMargin(item.pengikatan);
+          dataToSend.safetyMargin = String(Math.round(margin * 100));
           dataToSend.nilaiLikuidasi = computeNilaiLikuidasi(
-            item.rerataNilaiPasar
+            item.rerataNilaiPasar,
+            margin
           );
         }
         if (item.jenisjaminan === "Sertifikat") {
@@ -1617,10 +1704,27 @@ const normalizeJaminanItem = (item) => {
                             <option value="SHM">SHM</option>
                             <option value="SHGB">SHGB</option>
                           </Select>
+                          <Select
+                            label="Jenis Pengikatan"
+                            value={item.statusPengikatan}
+                            onChange={handleItemChange(index, "statusPengikatan")}
+                          >
+                            <option value="">Pilih Jenis Pengikatan</option>
+                            <option value="APHT">APHT</option>
+                            <option value="SKMHT">SKMHT</option>
+                          </Select>
                           <Input
                             label="No SHM / SHGB"
                             value={item.noSertifikat}
                             onChange={handleItemChange(index, "noSertifikat")}
+                          />
+                          <Input
+                            label="Nama Pemilik Sertifikat"
+                            value={item.namaPemilikSertifikat}
+                            onChange={handleItemChange(
+                              index,
+                              "namaPemilikSertifikat"
+                            )}
                           />
                           <div className="space-y-1.5">
                             <label className="text-xs font-semibold text-slate-600 uppercase">
@@ -1883,11 +1987,15 @@ const normalizeJaminanItem = (item) => {
                             <option value="Roda 3">Kendaraan Roda 3</option>
                             <option value="Roda 4">Kendaraan Roda 4</option>
                           </Select>
-                          <Input
-                            label="Pengikatan"
+                          <Select
+                            label="Jenis Pengikatan"
                             value={item.pengikatan}
                             onChange={handleItemChange(index, "pengikatan")}
-                          />
+                          >
+                            <option value="">Pilih Pengikatan</option>
+                            <option value="Fidusia">Fidusia</option>
+                            <option value="Non Fidusia">Non Fidusia</option>
+                          </Select>
                           <Input
                             label="Rerata Nilai Pasar"
                             type="text"
@@ -2052,8 +2160,7 @@ const normalizeJaminanItem = (item) => {
                         label="Upload Dokumen Agunan"
                         type="file"
                         onChange={handleFileChange(index)}
-                        accept="image/*"
-                        capture="environment"
+                        accept="application/pdf"
                       />
                     </>
                   ) : null}
@@ -2106,19 +2213,6 @@ const normalizeJaminanItem = (item) => {
                     <option value="Tidak">Tidak Ada</option>
                   </Select>
 
-                  {item.statusHubBankLain === "Ya" ? (
-                    <div className="space-y-2">
-                      <Input
-                        label="Upload SLIK (TXT)"
-                        type="file"
-                        accept=".txt,text/plain"
-                        onChange={handleSlikFileChange(index)}
-                      />
-                      <div className="text-[11px] text-slate-500">
-                        {item.slik?.name || item.slikFileName || "Belum ada file SLIK"}
-                      </div>
-                    </div>
-                  ) : null}
                 </Card>
               </div>
 

@@ -361,6 +361,15 @@ const handleFileChange = (field) => (e) => {
     ...prev,
     [field]: file,
   }));
+  Swal.fire({
+    toast: true,
+    position: "top-end",
+    icon: "success",
+    title: "File berhasil disimpan",
+    showConfirmButton: false,
+    timer: 1200,
+    timerProgressBar: true,
+  });
 };
 
 const handleNumberFieldChange = (field) => (event) => {
@@ -436,7 +445,7 @@ const handleSave = async () => {
     Swal.fire("Berhasil", "Data Instansi berhasil disimpan", "success");
     const plafonValue = toNumber(formData.plafonDiajukan);
     const nextPath =
-      plafonValue > 40000000
+      plafonValue > 10000000
         ? `/master-data/data-jaminan/${encodeURIComponent(no_permohonan)}`
         : "/dashboard";
     navigate(nextPath);

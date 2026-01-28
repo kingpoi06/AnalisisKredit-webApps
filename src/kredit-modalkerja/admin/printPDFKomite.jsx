@@ -47,6 +47,109 @@ const normalizeList = (data) => {
   return Array.isArray(data[0]) ? data.flat() : data;
 };
 
+const getFieldValue = (source, keys, fallback = "") => {
+  for (const key of keys) {
+    const value = source?.[key];
+    if (value !== undefined && value !== null) {
+      return value;
+    }
+  }
+  return fallback;
+};
+
+const normalizeAngsuranKey = (value) =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
+const buildAngsuranSummary = (caraAngsuranKredit, sistemAngsuranKredit) => {
+  const cara = String(caraAngsuranKredit ?? "").trim();
+  const sistem = String(sistemAngsuranKredit ?? "").trim();
+  if (!cara && !sistem) return "";
+  if (cara && sistem) return `${sistem} (${cara})`;
+  return cara || sistem;
+};
+
+const isKreditMusimanAngsuran = (caraAngsuranKredit) => {
+  const normalized = normalizeAngsuranKey(caraAngsuranKredit);
+  if (!normalized) return false;
+  if (normalized === "bulanan") return false;
+  return normalized.includes("bulan");
+};
+
+const getIntervalFromCara = (caraAngsuranKredit) => {
+  const normalized = normalizeAngsuranKey(caraAngsuranKredit);
+  if (!normalized) return 1;
+  if (normalized.includes("lebih dari 6")) return 12;
+  if (normalized.includes("6")) return 6;
+  if (normalized.includes("3")) return 3;
+  if (normalized.includes("bulanan") || normalized.includes("bulan")) return 1;
+  return 1;
+};
+
+const getIntervalFromSistem = (sistemAngsuranKredit) => {
+  const normalized = normalizeAngsuranKey(sistemAngsuranKredit);
+  if (!normalized) return null;
+  if (normalized.includes("triwulan")) return 3;
+  if (normalized.includes("semester") || normalized.includes("6 bulan")) return 6;
+  if (normalized.includes("setiap bulan")) return 1;
+  return null;
+};
+
+const buildAngsuranDisplay = ({
+  jangkaWaktuKredit,
+  plafonPermohonan,
+  pokokPerBulan,
+  totalBungaPerbulan,
+  caraAngsuranKredit,
+  sistemAngsuranKredit,
+}) => {
+  const months = Math.max(0, Math.floor(toNumber(jangkaWaktuKredit)));
+  if (!months) {
+    return { label: "Total Angsuran", value: "-", periodCount: 0 };
+  }
+
+  const intervalFromSistem = getIntervalFromSistem(sistemAngsuranKredit);
+  const intervalFromCara = getIntervalFromCara(caraAngsuranKredit);
+  const interval = intervalFromSistem || intervalFromCara || 1;
+  const periodCount = Math.ceil(months / interval);
+
+  const monthlyPrincipal = toNumber(pokokPerBulan);
+  const monthlyInterest = toNumber(totalBungaPerbulan);
+  const totalPrincipal = toNumber(plafonPermohonan);
+  const totalInterest = monthlyInterest * months;
+
+  const normalizedSistem = normalizeAngsuranKey(sistemAngsuranKredit);
+  const bayarPokokSaatJt = normalizedSistem.includes("pokok saat jt");
+  const bayarSekaligusSaatJt = normalizedSistem.includes(
+    "dibayar sekaligus saat jt"
+  );
+
+  if (bayarSekaligusSaatJt || bayarPokokSaatJt) {
+    return {
+      label: "Total Bayar Saat JT",
+      value: `Rp ${formatIdNumber(totalPrincipal + totalInterest)}`,
+      periodCount,
+    };
+  }
+
+  const totalPerPeriod = (monthlyPrincipal + monthlyInterest) * interval;
+  const periodLabel =
+    interval === 1 ? "Total Angsuran per Bulan" : `Total Angsuran per ${interval} Bulan`;
+  return {
+    label: periodLabel,
+    value: `Rp ${formatIdNumber(totalPerPeriod)}`,
+    periodCount,
+  };
+};
+
+const buildJangkaWaktuLabel = (jangkaWaktuKredit) => {
+  const base = formatIdInteger(jangkaWaktuKredit);
+  if (!base) return "-";
+  return `${base} Bulan`;
+};
+
 const matchByPermohonan = (list, noPermohonan) =>
   list.find(
     (item) => String(item?.no_permohonan ?? item?.noPermohonan) === noPermohonan
@@ -180,11 +283,42 @@ export default function PrintPDFKomite() {
   const dataUsaha = reportData.dataUsaha || {};
   const dataAnalisis = reportData.dataAnalisis || {};
   const dataJaminan = reportData.dataJaminan || [];
+  const caraAngsuranValue = getFieldValue(dataPermohonan, [
+    "caraAngsuranKredit",
+    "cara_angsuran_kredit",
+  ]);
+  const sistemAngsuranValue = getFieldValue(dataPermohonan, [
+    "sistemAngsuranKredit",
+    "sistem_angsuran_kredit",
+    "sistemAngsuran",
+    "sistem_angsuran",
+  ]);
+  const angsuranSummary = buildAngsuranSummary(
+    caraAngsuranValue,
+    sistemAngsuranValue
+  );
+  const isKreditMusiman = isKreditMusimanAngsuran(caraAngsuranValue);
+  const angsuranSummaryLabel = angsuranSummary
+    ? `${angsuranSummary}${isKreditMusiman ? " (Kredit Musiman)" : ""}`
+    : isKreditMusiman
+    ? "Kredit Musiman"
+    : "";
+  const jangkaWaktuLabel = buildJangkaWaktuLabel(
+    dataPermohonan.jangkaWaktuKredit
+  );
+  const angsuranDisplay = buildAngsuranDisplay({
+    jangkaWaktuKredit: dataPermohonan.jangkaWaktuKredit,
+    plafonPermohonan: dataPermohonan.plafonPermohonan,
+    pokokPerBulan: dataAnalisis.pokokPerBulan,
+    totalBungaPerbulan: dataAnalisis.totalBungaPerbulan,
+    caraAngsuranKredit: caraAngsuranValue,
+    sistemAngsuranKredit: sistemAngsuranValue,
+  });
 
   const kesimpulan = dataPermohonan.plafonPermohonan
     ? `DAPAT diberikan KREDIT sebesar Rp ${formatIdNumber(
         dataPermohonan.plafonPermohonan
-      )} Jangka Waktu ${dataPermohonan.jangkaWaktuKredit || "-"} bulan`
+      )} Jangka Waktu ${jangkaWaktuLabel}`
     : "-";
 
   return (
@@ -221,8 +355,17 @@ export default function PrintPDFKomite() {
           </div>
 
           {loading ? (
-            <div className="bg-white rounded-lg border border-gray-200 p-6 text-sm text-gray-500">
-              Memuat data...
+            <div className="bg-white rounded-lg border border-gray-200 p-6">
+              <div className="min-h-[50vh] flex flex-col items-center justify-center text-center">
+                <img
+                  src="/bpr.png"
+                  alt="Logo BPR"
+                  className="h-16 w-16 object-contain"
+                />
+                <p className="mt-2 text-sm font-semibold text-gray-600">
+                  Mohon ditunggu...
+                </p>
+              </div>
             </div>
           ) : (
             <div
@@ -285,9 +428,7 @@ export default function PrintPDFKomite() {
                   <Row
                     label="Jangka Waktu"
                     value={
-                      dataPermohonan.jangkaWaktuKredit
-                        ? `${dataPermohonan.jangkaWaktuKredit} Bulan`
-                        : "-"
+                      jangkaWaktuLabel
                     }
                   />
                   <Row
@@ -307,6 +448,14 @@ export default function PrintPDFKomite() {
                     }
                   />
                   <Row
+                    label="Jumlah Periode Pembayaran"
+                    value={
+                      angsuranDisplay.periodCount
+                        ? `${formatIdNumber(angsuranDisplay.periodCount)} kali`
+                        : "-"
+                    }
+                  />
+                  <Row
                     label="Cara Perhitungan"
                     value={dataPermohonan.perhitunganBunga}
                   />
@@ -316,7 +465,15 @@ export default function PrintPDFKomite() {
                   />
                   <Row
                     label="Cara Angsuran Kredit"
-                    value={dataPermohonan.caraAngsuranKredit}
+                    value={caraAngsuranValue}
+                  />
+                  <Row
+                    label="Sistem Angsuran Kredit"
+                    value={angsuranSummaryLabel || sistemAngsuranValue}
+                  />
+                  <Row
+                    label={angsuranDisplay.label}
+                    value={angsuranDisplay.value}
                   />
                 </div>
 
@@ -336,7 +493,6 @@ export default function PrintPDFKomite() {
                 <SectionTitle>III. Analisa 5C</SectionTitle>
                 <div className="space-y-2">
                   <Row label="Character" value={dataAnalisis.character} />
-                  <Row label="Capital" value={dataAnalisis.capital1} />
                   <Row label="Capacity" value={dataAnalisis.capacity1} />
                   <Row label="Condition" value={dataAnalisis.capacity2} />
                   <Row label="Collateral" value={dataAnalisis.capacity3} />

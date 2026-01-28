@@ -6,7 +6,10 @@ import { useNavigate } from "react-router-dom";
 import { jwtDecode } from "jwt-decode";
 import Swal from "sweetalert2";
 import axios from "axios";
-import { FaUsers, FaUserShield } from "react-icons/fa";
+import { FaClipboardList, FaEye, FaUsers, FaUserShield } from "react-icons/fa";
+import { ResponsiveBar } from "@nivo/bar";
+import { ResponsiveLine } from "@nivo/line";
+import { ResponsivePie } from "@nivo/pie";
 import { API_ENDPOINTS } from "../config/apiEndpoints";
 
 const ROLE_KEYS = ["role", "jabatan", "level", "userRole", "user_role"];
@@ -101,6 +104,45 @@ const CREATED_AT_KEYS = [
   "createdDate",
   "created_date",
 ];
+const CREATOR_KEYS = [
+  "kdPegawaiPengusul",
+  "kd_pegawai_pengusul",
+  "kdPengusul",
+  "kd_pengusul",
+  "kdPegawai",
+  "kd_pegawai",
+  "kdpegawai",
+  "kodePegawai",
+  "kode_pegawai",
+  "createdBy",
+  "created_by",
+  "createdUser",
+  "created_user",
+  "inputBy",
+  "input_by",
+  "userInput",
+  "user_input",
+  "userId",
+  "user_id",
+  "idUser",
+  "id_user",
+  "username",
+  "userName",
+  "user_name",
+  "email",
+  "namaPengusul",
+  "nama_pengusul",
+  "namaAO",
+  "nama_ao",
+  "namaPetugas",
+  "nama_petugas",
+  "petugasInput",
+  "petugas_input",
+  "namaPegawai",
+  "nama_pegawai",
+  "namaUser",
+  "nama_user",
+];
 const ALAMAT_KANTOR_KEYS = [
   "alamatKantor",
   "alamat_kantor",
@@ -135,6 +177,16 @@ const getFieldValue = (source, keys, fallback = "") => {
 const normalizeRole = (value) =>
   String(value ?? "").toLowerCase().replace(/[_\s]+/g, "");
 
+const normalizeKodeKantor = (value) => {
+  const raw = String(value ?? "").trim();
+  if (!raw || raw === "-") return "";
+  const digits = raw.replace(/\D/g, "");
+  if (digits && digits.length <= 3) {
+    return digits.padStart(3, "0");
+  }
+  return raw.toLowerCase();
+};
+
 const formatRoleLabel = (value) => {
   if (!value) return "-";
   const normalized = normalizeRole(value);
@@ -143,7 +195,9 @@ const formatRoleLabel = (value) => {
 
 const formatDate = (date) => {
   if (!date) return "-";
-  return new Date(date).toLocaleDateString("id-ID", {
+  const parsed = new Date(date);
+  if (Number.isNaN(parsed.getTime())) return "-";
+  return parsed.toLocaleDateString("id-ID", {
     day: "2-digit",
     month: "short",
     year: "numeric",
@@ -157,6 +211,9 @@ const normalizeCabangKantorValue = (value) => {
   }
   return String(value);
 };
+
+const normalizeCabangName = (value) =>
+  String(value ?? "").trim().toLowerCase();
 
 const getCabangKantorValue = (user) => {
   const directValue = normalizeCabangKantorValue(
@@ -214,6 +271,10 @@ const isKomiteCabangRole = (role) =>
   String(role ?? "").includes("komitecabang");
 const isPenyeliaRole = (role) => String(role ?? "").includes("penyelia");
 const isAdminRole = (role) => String(role ?? "").includes("admin");
+const isExcludedCabangRole = (role) => {
+  const normalized = normalizeRole(role);
+  return normalized === "superadmin" || normalized === "headofficer";
+};
 const getEmptyCreateForm = () => ({
   name: "",
   username: "",
@@ -227,17 +288,20 @@ const getEmptyCreateForm = () => ({
   telpKantor: "",
 });
 
-export default function DashboardUsers() {
+export default function DashboardPusat() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState([]);
+  const [monitoringList, setMonitoringList] = useState([]);
   const [cabangKantorList, setCabangKantorList] = useState([]);
   const [pegawaiList, setPegawaiList] = useState([]);
   const [filterRole, setFilterRole] = useState("ALL");
   const [searchQuery, setSearchQuery] = useState("");
+  const [monthFilter, setMonthFilter] = useState("ALL");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
+  const [isMobile, setIsMobile] = useState(false);
   const [editForm, setEditForm] = useState({
     name: "",
     username: "",
@@ -254,6 +318,8 @@ export default function DashboardUsers() {
   const [saving, setSaving] = useState(false);
   const [creating, setCreating] = useState(false);
   const [deletingId, setDeletingId] = useState("");
+  const [showCabangModal, setShowCabangModal] = useState(false);
+  const [selectedCabang, setSelectedCabang] = useState(null);
 
   useEffect(() => {
     const token = localStorage.getItem("accessToken");
@@ -270,14 +336,14 @@ export default function DashboardUsers() {
         decoded?.jabatan ||
         decoded?.level ||
         "";
-      const normalizedRole = String(roleValue).toLowerCase();
+      const normalizedRole = normalizeRole(roleValue);
       if (decoded.exp < Date.now() / 1000) {
         localStorage.removeItem("accessToken");
         navigate("/");
         return;
       }
 
-      if (normalizedRole !== "superadmin") {
+      if (normalizedRole !== "headofficer") {
         navigate("/dashboard");
         return;
       }
@@ -291,6 +357,145 @@ export default function DashboardUsers() {
       navigate("/");
     }
   }, [navigate]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 640);
+    };
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (!users.length) return;
+    fetchMonitoringData();
+  }, [users]);
+
+  const normalizeStatusPengajuan = (status) => {
+    if (!status) return "Pending";
+    const normalized = String(status).toLowerCase();
+    if (normalized.includes("approve") || normalized.includes("diterima")) {
+      return "Approve";
+    }
+    if (normalized.includes("reject") || normalized.includes("ditolak")) {
+      return "Reject";
+    }
+    if (normalized.includes("pending") || normalized.includes("proses")) {
+      return "Pending";
+    }
+    return "Pending";
+  };
+
+  const normalizeLookupValue = (value) => {
+    const cleaned = String(value ?? "").trim();
+    if (!cleaned || cleaned === "-") return "";
+    return cleaned.toLowerCase();
+  };
+
+  const userLookup = useMemo(() => {
+    const byKdPegawai = new Map();
+    const byId = new Map();
+    const byUsername = new Map();
+    const byEmail = new Map();
+    const byName = new Map();
+
+    const assign = (map, key, user) => {
+      if (!key || map.has(key)) return;
+      map.set(key, user);
+    };
+
+    users.forEach((user) => {
+      if (isExcludedCabangRole(user?.role || user?.roleLabel)) return;
+      const kdPegawai = normalizeLookupValue(user?.kdPegawai);
+      const idValue = normalizeLookupValue(user?.id);
+      const username = normalizeLookupValue(user?.username);
+      const email = normalizeLookupValue(user?.email);
+      const name = normalizeLookupValue(user?.name);
+
+      assign(byKdPegawai, kdPegawai, user);
+      assign(byId, idValue, user);
+      assign(byUsername, username, user);
+      assign(byEmail, email, user);
+      assign(byName, name, user);
+    });
+
+    return { byKdPegawai, byId, byUsername, byEmail, byName };
+  }, [users]);
+
+  const resolveUserByKey = (value) => {
+    const key = normalizeLookupValue(value);
+    if (!key) return null;
+    return (
+      userLookup.byKdPegawai.get(key) ||
+      userLookup.byId.get(key) ||
+      userLookup.byUsername.get(key) ||
+      userLookup.byEmail.get(key) ||
+      userLookup.byName.get(key) ||
+      null
+    );
+  };
+
+  const userCabangMap = useMemo(() => {
+    const map = new Map();
+    users.forEach((user) => {
+      if (isExcludedCabangRole(user?.role || user?.roleLabel)) return;
+      const kode = normalizeKodeKantor(user?.kodeKantor);
+      if (!kode) return;
+      if (map.has(kode)) return;
+      map.set(kode, {
+        cabangKantor: user?.cabangKantor || "",
+        alamatKantor: user?.alamatKantor || "",
+      });
+    });
+    return map;
+  }, [users]);
+
+  const resolveCabangLabel = (kodeKantor, fallbackName) => {
+    const normalizedKode = normalizeKodeKantor(kodeKantor);
+    const userMatch = userCabangMap.get(normalizedKode);
+    if (userMatch?.cabangKantor) return userMatch.cabangKantor;
+    return fallbackName || String(kodeKantor ?? "").trim() || "-";
+  };
+
+  const resolveCabangAlamat = (kodeKantor, cabangName) => {
+    const normalizedKode = normalizeKodeKantor(kodeKantor);
+    const normalizedName = normalizeCabangName(cabangName);
+    const userMatch = userCabangMap.get(normalizedKode);
+    if (userMatch?.alamatKantor) return userMatch.alamatKantor;
+    if (normalizedName) {
+      const fallback = Array.from(userCabangMap.values()).find(
+        (row) =>
+          normalizeCabangName(row.cabangKantor) === normalizedName
+      );
+      if (fallback?.alamatKantor) return fallback.alamatKantor;
+    }
+    return "-";
+  };
+
+  const resolveCabangKey = (kodeKantor, cabangName) => {
+    const normalizedKode = normalizeKodeKantor(kodeKantor);
+    if (normalizedKode && userCabangMap.has(normalizedKode)) {
+      return normalizedKode;
+    }
+    const normalizedName = normalizeCabangName(cabangName);
+    if (!normalizedName) return "";
+    for (const [key, row] of userCabangMap.entries()) {
+      if (normalizeCabangName(row.cabangKantor) === normalizedName) {
+        return key;
+      }
+    }
+    return "";
+  };
+
+  const isSameCabang = (item, row) => {
+    const kodeItem = normalizeKodeKantor(item?.kodeKantor);
+    const kodeRow = normalizeKodeKantor(row?.kodeKantor);
+    if (kodeItem && kodeRow && kodeItem === kodeRow) return true;
+    const nameItem = String(item?.cabangKantor ?? "").trim().toLowerCase();
+    const nameRow = String(row?.cabangKantor ?? "").trim().toLowerCase();
+    return Boolean(nameItem && nameRow && nameItem === nameRow);
+  };
 
   const getUserIdentifier = (user) => {
     const candidate = user?.kdPegawai || user?.id || user?.kdpegawai || "";
@@ -337,6 +542,81 @@ export default function DashboardUsers() {
       );
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchMonitoringData = async () => {
+    try {
+      const [listRes, dataPermohonanRes] = await Promise.all([
+        axios.get(API_ENDPOINTS.generate.noPermohonan()),
+        axios.get(API_ENDPOINTS.datanasabah.dataPermohonan.list()),
+      ]);
+      const listData = normalizeList(
+        listRes.data?.Data ?? listRes.data?.data ?? listRes.data ?? []
+      );
+      const permohonanList = normalizeList(
+        dataPermohonanRes.data?.Data ??
+          dataPermohonanRes.data?.data ??
+          dataPermohonanRes.data ??
+          []
+      );
+      const permohonanMap = new Map(
+        permohonanList.map((item) => [
+          item.no_permohonan ?? item.noPermohonan,
+          item,
+        ])
+      );
+      const normalized = listData.map((item) => {
+        const noPermohonan = item.no_permohonan ?? item.noPermohonan;
+        const permohonanData = permohonanMap.get(noPermohonan) || {};
+        const statusValue =
+          item.statusPengajuan ??
+          item.status_pengajuan ??
+          permohonanData.statusPengajuan ??
+          permohonanData.status_pengajuan ??
+          "";
+        const createdAt =
+          getFieldValue(item, CREATED_AT_KEYS) ||
+          getFieldValue(permohonanData, CREATED_AT_KEYS) ||
+          item.createdAt ||
+          permohonanData.createdAt ||
+          "";
+        const creatorValue =
+          getFieldValue(item, CREATOR_KEYS) ||
+          getFieldValue(permohonanData, CREATOR_KEYS) ||
+          "";
+        const creatorUser = resolveUserByKey(creatorValue);
+
+        let kodeKantor =
+          getFieldValue(item, KODE_KANTOR_KEYS) ||
+          getFieldValue(permohonanData, KODE_KANTOR_KEYS) ||
+          "";
+        let cabangKantor =
+          getFieldValue(item, CABANG_KANTOR_KEYS) ||
+          getFieldValue(permohonanData, CABANG_KANTOR_KEYS) ||
+          "";
+        if (!kodeKantor && creatorUser?.kodeKantor) {
+          kodeKantor = creatorUser.kodeKantor;
+        }
+        if (!cabangKantor && creatorUser?.cabangKantor) {
+          cabangKantor = creatorUser.cabangKantor;
+        }
+        const normalizedKodeKantor = normalizeKodeKantor(kodeKantor);
+        const cabangInfo = {
+          kodeKantor: normalizedKodeKantor || kodeKantor,
+          cabangKantor: resolveCabangLabel(kodeKantor, cabangKantor),
+        };
+        return {
+          noPermohonan,
+          statusPengajuan: normalizeStatusPengajuan(statusValue),
+          createdAt,
+          kodeKantor: cabangInfo.kodeKantor,
+          cabangKantor: cabangInfo.cabangKantor,
+        };
+      });
+      setMonitoringList(normalized);
+    } catch (err) {
+      console.error("FETCH MONITORING ERROR:", err);
     }
   };
 
@@ -764,6 +1044,391 @@ export default function DashboardUsers() {
     []
   );
 
+  const parseDateValue = (value) => {
+    if (!value) return null;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed;
+  };
+
+  const getMonthKey = (date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+
+  const formatMonthLabel = (key) => {
+    if (!key) return "";
+    const [yearRaw, monthRaw] = String(key).split("-");
+    const year = Number(yearRaw);
+    const month = Number(monthRaw);
+    if (!year || !month) return key;
+    const date = new Date(year, month - 1, 1);
+    if (Number.isNaN(date.getTime())) return key;
+    return date.toLocaleDateString("id-ID", { month: "short", year: "numeric" });
+  };
+
+  const buildMonthRange = (startKey, endKey) => {
+    if (!startKey || !endKey) return [];
+    const [startYear, startMonth] = String(startKey).split("-").map(Number);
+    const [endYear, endMonth] = String(endKey).split("-").map(Number);
+    if (!startYear || !startMonth || !endYear || !endMonth) return [];
+    const months = [];
+    let year = startYear;
+    let month = startMonth;
+    while (year < endYear || (year === endYear && month <= endMonth)) {
+      months.push(`${year}-${String(month).padStart(2, "0")}`);
+      month += 1;
+      if (month > 12) {
+        month = 1;
+        year += 1;
+      }
+    }
+    return months;
+  };
+
+  const monthOptions = useMemo(() => {
+    const months = new Set();
+    monitoringList.forEach((item) => {
+      const date = parseDateValue(item.createdAt);
+      if (!date) return;
+      months.add(getMonthKey(date));
+    });
+    return Array.from(months).sort((a, b) => b.localeCompare(a));
+  }, [monitoringList]);
+
+  const filteredMonitoringList =
+    monthFilter === "ALL"
+      ? monitoringList
+      : monitoringList.filter((item) => {
+          const date = parseDateValue(item.createdAt);
+          if (!date) return false;
+          return getMonthKey(date) === monthFilter;
+        });
+
+  const branchStats = useMemo(() => {
+    const map = new Map();
+    userCabangMap.forEach((row, kode) => {
+      const label = row.cabangKantor || kode || "Cabang";
+      const key = kode || label;
+      if (!map.has(key)) {
+        map.set(key, {
+          kodeKantor: kode,
+          cabangKantor: label,
+          approve: 0,
+          reject: 0,
+          pending: 0,
+          total: 0,
+        });
+      }
+    });
+
+    filteredMonitoringList.forEach((item) => {
+      const key = resolveCabangKey(item.kodeKantor, item.cabangKantor);
+      if (!key) return;
+      const label = resolveCabangLabel(key, item.cabangKantor);
+      const entry =
+        map.get(key) || {
+          kodeKantor: key,
+          cabangKantor: label,
+          approve: 0,
+          reject: 0,
+          pending: 0,
+          total: 0,
+        };
+      const status = normalizeStatusPengajuan(item.statusPengajuan);
+      if (status === "Approve") entry.approve += 1;
+      else if (status === "Reject") entry.reject += 1;
+      else entry.pending += 1;
+      entry.total += 1;
+      map.set(key, entry);
+    });
+
+    return Array.from(map.values()).sort((a, b) => b.total - a.total);
+  }, [filteredMonitoringList, userCabangMap]);
+
+  const statusTotals = useMemo(() => {
+    return branchStats.reduce(
+      (acc, item) => {
+        acc.approve += item.approve;
+        acc.reject += item.reject;
+        acc.pending += item.pending;
+        acc.total += item.total;
+        return acc;
+      },
+      { approve: 0, reject: 0, pending: 0, total: 0 }
+    );
+  }, [branchStats]);
+
+  const performanceStats = useMemo(() => {
+    const candidates = branchStats.filter((item) => item.total > 0);
+    if (!candidates.length) return { top: null, bottom: null };
+    const withRate = candidates.map((item) => ({
+      ...item,
+      approveRate: item.total ? item.approve / item.total : 0,
+    }));
+    const sorted = [...withRate].sort((a, b) => b.approveRate - a.approveRate);
+    return {
+      top: sorted[0],
+      bottom: sorted[sorted.length - 1],
+    };
+  }, [branchStats]);
+
+  const barChartData = useMemo(
+    () =>
+      branchStats
+        .filter((item) => item.total > 0)
+        .map((item) => ({
+          cabang: item.cabangKantor,
+          Approve: item.approve,
+          Reject: item.reject,
+          Pending: item.pending,
+        })),
+    [branchStats]
+  );
+  const barChartPadding = useMemo(() => {
+    const count = barChartData.length;
+    if (count <= 2) return 0.6;
+    if (count <= 4) return 0.5;
+    return 0.35;
+  }, [barChartData]);
+  const barChartBottomMargin = useMemo(() => {
+    const longest = barChartData.reduce((max, item) => {
+      const label = String(item.cabang ?? "");
+      return Math.max(max, label.length);
+    }, 0);
+    if (isMobile) return longest > 20 ? 105 : 90;
+    if (longest > 34) return 110;
+    if (longest > 24) return 95;
+    return 80;
+  }, [barChartData, isMobile]);
+  const barChartMargin = useMemo(
+    () => ({
+      top: 20,
+      right: isMobile ? 10 : 20,
+      bottom: barChartBottomMargin,
+      left: isMobile ? 48 : 60,
+    }),
+    [barChartBottomMargin, isMobile]
+  );
+  const formatCabangTick = (value) => {
+    const label = String(value ?? "");
+    const maxLength = isMobile ? 18 : 28;
+    if (label.length > maxLength) return `${label.slice(0, maxLength)}...`;
+    return label;
+  };
+  const lineChartMargin = useMemo(
+    () =>
+      isMobile
+        ? { top: 10, right: 10, bottom: 50, left: 45 }
+        : { top: 20, right: 20, bottom: 50, left: 60 },
+    [isMobile]
+  );
+  const lineChartLegends = useMemo(
+    () =>
+      isMobile
+        ? [
+            {
+              anchor: "bottom",
+              direction: "row",
+              translateY: 40,
+              itemWidth: 70,
+              itemHeight: 14,
+              symbolSize: 10,
+              symbolShape: "circle",
+            },
+          ]
+        : [
+            {
+              anchor: "bottom-right",
+              direction: "column",
+              translateX: 90,
+              itemWidth: 80,
+              itemHeight: 16,
+              symbolSize: 10,
+              symbolShape: "circle",
+            },
+          ],
+    [isMobile]
+  );
+  const pieChartMargin = useMemo(
+    () =>
+      isMobile
+        ? { top: 10, right: 10, bottom: 40, left: 10 }
+        : { top: 10, right: 80, bottom: 10, left: 80 },
+    [isMobile]
+  );
+  const pieChartLegends = useMemo(
+    () =>
+      isMobile
+        ? [
+            {
+              anchor: "bottom",
+              direction: "row",
+              translateY: 34,
+              itemWidth: 70,
+              itemHeight: 16,
+              symbolSize: 10,
+              symbolShape: "circle",
+            },
+          ]
+        : [
+            {
+              anchor: "right",
+              direction: "column",
+              translateX: 60,
+              itemWidth: 80,
+              itemHeight: 18,
+              symbolSize: 12,
+              symbolShape: "circle",
+            },
+          ],
+    [isMobile]
+  );
+
+  const lineChartData = useMemo(() => {
+    const map = new Map();
+    filteredMonitoringList.forEach((item) => {
+      const date = parseDateValue(item.createdAt);
+      if (!date) return;
+      const key = getMonthKey(date);
+      const entry = map.get(key) || { approve: 0, reject: 0 };
+      const status = normalizeStatusPengajuan(item.statusPengajuan);
+      if (status === "Approve") entry.approve += 1;
+      if (status === "Reject") entry.reject += 1;
+      map.set(key, entry);
+    });
+    if (!map.size) return [];
+    const keys = Array.from(map.keys()).sort();
+    const months = buildMonthRange(keys[0], keys[keys.length - 1]);
+    const approveData = months.map((key) => ({
+      x: formatMonthLabel(key),
+      y: map.get(key)?.approve ?? 0,
+    }));
+    const rejectData = months.map((key) => ({
+      x: formatMonthLabel(key),
+      y: map.get(key)?.reject ?? 0,
+    }));
+    return [
+      { id: "Approve", data: approveData },
+      { id: "Reject", data: rejectData },
+    ];
+  }, [filteredMonitoringList]);
+
+  const donutChartData = useMemo(
+    () => [
+      { id: "Approve", label: "Approve", value: statusTotals.approve },
+      { id: "Reject", label: "Reject", value: statusTotals.reject },
+      { id: "Pending", label: "Pending", value: statusTotals.pending },
+    ],
+    [statusTotals]
+  );
+
+  const totalCabangValue = userCabangMap.size || branchStats.length || 0;
+
+  const topCabangLabel = performanceStats.top
+    ? `${performanceStats.top.cabangKantor} (${Math.round(
+        performanceStats.top.approveRate * 100
+      )}%)`
+    : "-";
+  const bottomCabangLabel = performanceStats.bottom
+    ? `${performanceStats.bottom.cabangKantor} (${Math.round(
+        performanceStats.bottom.approveRate * 100
+      )}%)`
+    : "-";
+
+  const cabangTableRows = useMemo(() => {
+    const map = new Map();
+    userCabangMap.forEach((row, kode) => {
+      const cabangName = row.cabangKantor || kode || "Cabang";
+      const key = kode || cabangName;
+      if (!map.has(key)) {
+        map.set(key, {
+          kodeKantor: kode,
+          cabangKantor: cabangName,
+          alamatKantor: row.alamatKantor || "-",
+          approve: 0,
+          reject: 0,
+          pending: 0,
+          total: 0,
+        });
+      }
+    });
+
+    filteredMonitoringList.forEach((item) => {
+      const kode = item.kodeKantor || "";
+      const cabangName = resolveCabangLabel(kode, item.cabangKantor);
+      const key = resolveCabangKey(kode, cabangName);
+      if (!key) return;
+      const entry =
+        map.get(key) || {
+          kodeKantor: key,
+          cabangKantor: resolveCabangLabel(key, cabangName),
+          alamatKantor: resolveCabangAlamat(key, cabangName),
+          approve: 0,
+          reject: 0,
+          pending: 0,
+          total: 0,
+        };
+      const status = normalizeStatusPengajuan(item.statusPengajuan);
+      if (status === "Approve") entry.approve += 1;
+      else if (status === "Reject") entry.reject += 1;
+      else entry.pending += 1;
+      entry.total += 1;
+      map.set(key, entry);
+    });
+
+    return Array.from(map.values()).sort((a, b) =>
+      String(a.cabangKantor ?? "").localeCompare(String(b.cabangKantor ?? ""))
+    );
+  }, [filteredMonitoringList, userCabangMap]);
+
+  const normalizedCabangQuery = searchQuery.trim().toLowerCase();
+  const searchedCabangRows = cabangTableRows.filter((row) => {
+    if (!normalizedCabangQuery) return true;
+    const haystack = [
+      row.kodeKantor,
+      row.cabangKantor,
+      row.alamatKantor,
+    ]
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(normalizedCabangQuery);
+  });
+
+  const cabangModalData = useMemo(() => {
+    if (!selectedCabang) return { rows: [], total: 0, approve: 0, reject: 0, pending: 0 };
+    const summary = {
+      total: selectedCabang.total || 0,
+      approve: selectedCabang.approve || 0,
+      reject: selectedCabang.reject || 0,
+      pending: selectedCabang.pending || 0,
+    };
+    const map = new Map();
+    filteredMonitoringList.forEach((item) => {
+      if (!isSameCabang(item, selectedCabang)) return;
+      const date = parseDateValue(item.createdAt);
+      if (!date) return;
+      const key = getMonthKey(date);
+      const entry = map.get(key) || { approve: 0, reject: 0, pending: 0 };
+      const status = normalizeStatusPengajuan(item.statusPengajuan);
+      if (status === "Approve") entry.approve += 1;
+      else if (status === "Reject") entry.reject += 1;
+      else entry.pending += 1;
+      map.set(key, entry);
+    });
+    if (!map.size) return { rows: [], ...summary };
+    const keys = Array.from(map.keys()).sort();
+    const months = buildMonthRange(keys[0], keys[keys.length - 1]);
+    const rows = months.map((key) => {
+      const entry = map.get(key) || { approve: 0, reject: 0, pending: 0 };
+      const total = entry.approve + entry.reject + entry.pending;
+      return {
+        month: formatMonthLabel(key),
+        ...entry,
+        total,
+      };
+    });
+    return { rows, ...summary };
+  }, [selectedCabang, filteredMonitoringList]);
+
   if (loading) {
     return (
       <div className="h-screen flex items-center justify-center">
@@ -775,7 +1440,7 @@ export default function DashboardUsers() {
   return (
     <PageBackground>
       <Sidebar />
-      <div className="md:ml-64">
+      <div className="w-full md:ml-64 md:w-[calc(100%-16rem)]">
         <Header />
         <main className="pt-20 px-4 pb-10">
           <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -784,84 +1449,219 @@ export default function DashboardUsers() {
                 <FaUserShield />
               </div>
               <div>
-                <h1 className="text-2xl font-bold">Dashboard Akun Pengguna</h1>
-                <p className="text-sm text-gray-500">Monitoring Users</p>
+                <h1 className="text-2xl font-bold">Dashboard Monitoring Cabang</h1>
+                <p className="text-sm text-gray-500">
+                  Kinerja persetujuan kredit per cabang
+                </p>
               </div>
             </div>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-2 mb-8">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 mb-8">
             <StatCard
-              title="Total User Officer"
-              value={officerCount}
+              title="Total Cabang"
+              value={totalCabangValue}
               icon={<FaUsers />}
               color="indigo"
             />
             <StatCard
-              title="Total User Komite Cabang"
-              value={komiteCabangCount}
+              title="Total Permohonan"
+              value={statusTotals.total}
               icon={<FaUsers />}
-              color="green"
+              color="emerald"
+            />
+            <StatCard
+              title="Cabang Tertinggi"
+              value={topCabangLabel}
+              icon={<FaUserShield />}
+              color="amber"
+            />
+            <StatCard
+              title="Cabang Terendah"
+              value={bottomCabangLabel}
+              icon={<FaUserShield />}
+              color="rose"
             />
           </div>
 
-          <div className="mb-6 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                  Filter Role
-                </p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <FilterButton
-                    label="Semua"
-                    active={filterRole === "ALL"}
-                    onClick={() => setFilterRole("ALL")}
-                  />
-                  <FilterButton
-                    label="Officer"
-                    active={filterRole === "OFFICER"}
-                    onClick={() => setFilterRole("OFFICER")}
-                  />
-                  <FilterButton
-                    label="Komite Cabang"
-                    active={filterRole === "KOMITECABANG"}
-                    onClick={() => setFilterRole("KOMITECABANG")}
-                  />
-                  <FilterButton
-                    label="Penyelia"
-                    active={filterRole === "PENYELIA"}
-                    onClick={() => setFilterRole("PENYELIA")}
-                  />
-                  <FilterButton
-                    label="Admin"
-                    active={filterRole === "ADMIN"}
-                    onClick={() => setFilterRole("ADMIN")}
-                  />
-                  <FilterButton
-                    label="Superadmin"
-                    active={filterRole === "SUPERADMIN"}
-                    onClick={() => setFilterRole("SUPERADMIN")}
-                  />
+          <div className="grid gap-6 mb-10">
+            <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-800">
+                    Perbandingan Kinerja Cabang
+                  </h2>
+                  <p className="text-xs text-gray-500">
+                    Approve vs Reject vs Pending
+                  </p>
+              </div>
+            </div>
+              <div className="w-full overflow-hidden">
+                <div className="w-full min-w-0 h-60 sm:h-80">
+                  {barChartData.length ? (
+                    <ResponsiveBar
+                      data={barChartData}
+                      keys={["Approve", "Reject", "Pending"]}
+                      indexBy="cabang"
+                      margin={barChartMargin}
+                      padding={barChartPadding}
+                      colors={{ scheme: "set2" }}
+                      axisBottom={{
+                        tickRotation: isMobile ? -35 : -20,
+                        tickSize: 5,
+                        tickPadding: isMobile ? 6 : 8,
+                        legend: "",
+                        format: formatCabangTick,
+                      }}
+                      axisLeft={{
+                        tickSize: 4,
+                        tickPadding: 6,
+                        legend: "Jumlah",
+                        legendPosition: "middle",
+                        legendOffset: isMobile ? -40 : -45,
+                      }}
+                      enableLabel={false}
+                      tooltip={({ id, value, indexValue }) => (
+                        <div className="rounded-md border border-gray-200 bg-white px-3 py-2 text-xs shadow">
+                          <div className="font-semibold text-gray-800">
+                            {indexValue}
+                          </div>
+                          <div className="text-gray-600">
+                            {id}: {value}
+                          </div>
+                        </div>
+                      )}
+                    />
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-sm text-gray-400">
+                      Tidak ada data cabang.
+                    </div>
+                  )}
                 </div>
               </div>
-              <div className="w-full lg:w-auto">
-                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                  Pencarian
-                </label>
-                <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+            </div>
+
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+                <div className="mb-3">
+                  <h2 className="text-sm font-semibold text-gray-800">
+                    Tren Bulanan Nasabah Masuk
+                  </h2>
+                  <p className="text-xs text-gray-500">
+                    Perbandingan Approve dan Reject per bulan
+                  </p>
+                </div>
+                <div className="h-60 sm:h-72 overflow-hidden">
+                  {lineChartData.length ? (
+                    <ResponsiveLine
+                      data={lineChartData}
+                      margin={lineChartMargin}
+                      xScale={{ type: "point" }}
+                      yScale={{
+                        type: "linear",
+                        min: 0,
+                        max: "auto",
+                        stacked: false,
+                      }}
+                      axisBottom={{
+                        tickRotation: isMobile ? -35 : -25,
+                        tickPadding: isMobile ? 6 : 8,
+                      }}
+                      axisLeft={{
+                        tickPadding: 6,
+                        legend: "Jumlah",
+                        legendPosition: "middle",
+                        legendOffset: isMobile ? -40 : -45,
+                      }}
+                      colors={{ scheme: "set2" }}
+                      pointSize={isMobile ? 4 : 6}
+                      pointBorderWidth={isMobile ? 1 : 2}
+                      pointBorderColor={{ from: "serieColor" }}
+                      useMesh
+                      legends={lineChartLegends}
+                    />
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-sm text-gray-400">
+                      Tidak ada data tren.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+                <div className="mb-3">
+                  <h2 className="text-sm font-semibold text-gray-800">
+                    Proporsi Status Pengajuan
+                  </h2>
+                  <p className="text-xs text-gray-500">
+                    Perbandingan Approve, Reject, Pending
+                  </p>
+                </div>
+                <div className="h-60 sm:h-72 overflow-hidden">
+                  {statusTotals.total ? (
+                    <ResponsivePie
+                      data={donutChartData}
+                      margin={pieChartMargin}
+                      innerRadius={0.6}
+                      padAngle={1}
+                      cornerRadius={4}
+                      colors={{ scheme: "set2" }}
+                      activeOuterRadiusOffset={8}
+                      borderWidth={1}
+                      borderColor={{ from: "color", modifiers: [["darker", 0.2]] }}
+                      arcLabelsSkipAngle={10}
+                      arcLabelsTextColor="#1f2937"
+                      legends={pieChartLegends}
+                    />
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-sm text-gray-400">
+                      Tidak ada data status.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mb-6 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  Data Cabang
+                </p>
+                <p className="text-xs text-gray-500">
+                  Cari cabang berdasarkan kode, nama, atau alamat kantor.
+                </p>
+              </div>
+              <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-end">
+                <div className="w-full sm:w-52">
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    Filter Bulan
+                  </label>
+                  <select
+                    value={monthFilter}
+                    onChange={(e) => setMonthFilter(e.target.value)}
+                    className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
+                  >
+                    <option value="ALL">Semua Bulan</option>
+                    {monthOptions.map((month) => (
+                      <option key={month} value={month}>
+                        {formatMonthLabel(month)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="w-full sm:w-72">
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    Pencarian
+                  </label>
                   <input
                     type="text"
-                    placeholder="Cari nama / username / role..."
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition sm:w-72"
+                    placeholder="Cari kode / nama cabang..."
+                    className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                   />
-                  <button
-                    onClick={openCreateModal}
-                    className="w-full rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700 sm:w-auto"
-                  >
-                    Tambah User
-                  </button>
                 </div>
               </div>
             </div>
@@ -875,80 +1675,108 @@ export default function DashboardUsers() {
                     <th className="px-4 sm:px-6 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider w-16">
                       No
                     </th>
-                    <th className="px-4 sm:px-6 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
-                      Nama Lengkap
-                    </th>
-                    <th className="px-4 sm:px-6 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider w-40">
-                      Role
-                    </th>
-                    <th className="px-4 sm:px-6 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
-                      Kode Pegawai
-                    </th>
-                    <th className="px-4 sm:px-6 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                    <th className="px-4 sm:px-6 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider w-32">
                       Kode Kantor
                     </th>
                     <th className="px-4 sm:px-6 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
-                      Cabang Kantor
+                      Nama Cabang
                     </th>
-                    <th className="px-4 sm:px-6 py-3 text-center text-[11px] font-semibold text-gray-500 uppercase tracking-wider w-40">
-                      Tanggal Dibuat
+                    <th className="px-4 sm:px-6 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                      Alamat Kantor
                     </th>
-                    <th className="px-4 sm:px-6 py-3 text-center text-[11px] font-semibold text-gray-500 uppercase tracking-wider w-40">
+                    <th className="px-4 sm:px-6 py-3 text-center text-[11px] font-semibold text-gray-500 uppercase tracking-wider w-28">
+                      Total
+                    </th>
+                    <th className="px-4 sm:px-6 py-3 text-center text-[11px] font-semibold text-gray-500 uppercase tracking-wider w-28">
+                      Approve
+                    </th>
+                    <th className="px-4 sm:px-6 py-3 text-center text-[11px] font-semibold text-gray-500 uppercase tracking-wider w-28">
+                      Reject
+                    </th>
+                    <th className="px-4 sm:px-6 py-3 text-center text-[11px] font-semibold text-gray-500 uppercase tracking-wider w-28">
+                      Pending
+                    </th>
+                    <th className="px-4 sm:px-6 py-3 text-center text-[11px] font-semibold text-gray-500 uppercase tracking-wider w-32">
                       Aksi
                     </th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {searchedUsers.length === 0 ? (
+                  {searchedCabangRows.length === 0 ? (
                     <tr>
                       <td
                         colSpan={9}
                         className="px-6 py-8 text-center text-gray-400"
                       >
-                        Tidak ada data user
+                        Tidak ada data cabang.
                       </td>
                     </tr>
                   ) : (
-                    searchedUsers.map((user, index) => (
+                    searchedCabangRows.map((row, index) => (
                       <tr
-                        key={user.id || `${user.username}-${index}`}
+                        key={`${row.kodeKantor}-${row.cabangKantor}-${index}`}
                         className="border-b even:bg-gray-50/60 hover:bg-indigo-50/40 transition-colors duration-200"
                       >
                         <td className="px-4 sm:px-6 py-3 text-sm text-gray-500 text-center">
                           {index + 1}
                         </td>
-                        <td className="px-4 sm:px-6 py-3 font-semibold text-gray-800">
-                          {user.name}
+                        <td className="px-4 sm:px-6 py-3 text-sm font-semibold text-gray-800">
+                          {row.kodeKantor || "-"}
+                        </td>
+                        <td className="px-4 sm:px-6 py-3 text-sm text-gray-700">
+                          {row.cabangKantor || "-"}
                         </td>
                         <td className="px-4 sm:px-6 py-3 text-sm text-gray-600">
-                          {user.roleLabel}
+                          {row.alamatKantor || "-"}
                         </td>
-                        <td className="px-4 sm:px-6 py-3 text-sm text-gray-600">
-                          {user.kdPegawai}
+                        <td className="px-4 sm:px-6 py-3 text-center text-sm text-gray-700">
+                          {row.total}
                         </td>
-                        <td className="px-4 sm:px-6 py-3 text-sm text-gray-600">
-                          {user.kodeKantor}
+                        <td className="px-4 sm:px-6 py-3 text-center text-sm text-emerald-600 font-semibold">
+                          {row.approve}
                         </td>
-                        <td className="px-4 sm:px-6 py-3 text-sm text-gray-600">
-                          {user.cabangKantor}
+                        <td className="px-4 sm:px-6 py-3 text-center text-sm text-rose-600 font-semibold">
+                          {row.reject}
                         </td>
-                        <td className="px-4 sm:px-6 py-3 text-sm text-gray-600 text-center">
-                          {formatDate(user.createdAt)}
+                        <td className="px-4 sm:px-6 py-3 text-center text-sm text-amber-600 font-semibold">
+                          {row.pending}
                         </td>
                         <td className="px-4 sm:px-6 py-3 text-center">
                           <div className="flex items-center justify-center gap-2">
                             <button
-                              onClick={() => openEditModal(user)}
-                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition"
+                              type="button"
+                              onClick={() => {
+                                setSelectedCabang(row);
+                                setShowCabangModal(true);
+                              }}
+                              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-indigo-200 bg-white px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-indigo-700 shadow-sm transition hover:bg-indigo-50 hover:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-200"
                             >
-                              Edit
+                              <FaClipboardList className="text-[12px]" />
+                              Rekap
                             </button>
                             <button
-                              onClick={() => handleDelete(user)}
-                              disabled={deletingId === getUserIdentifier(user)}
-                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-error-100 text-error-700 hover:bg-red-200 transition disabled:cursor-not-allowed"
+                              type="button"
+                              onClick={() => {
+                                const kode = String(row.kodeKantor ?? "").trim();
+                                if (!kode || kode === "-") {
+                                  Swal.fire(
+                                    "Gagal",
+                                    "Kode kantor tidak ditemukan.",
+                                    "error"
+                                  );
+                                  return;
+                                }
+                                navigate(`/view-cabang/${encodeURIComponent(kode)}`, {
+                                  state: {
+                                    cabangKantor: row.cabangKantor,
+                                    alamatKantor: row.alamatKantor,
+                                  },
+                                });
+                              }}
+                              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-200 bg-indigo-500 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-700 shadow-sm transition hover:bg-slate-100 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-200"
                             >
-                              Hapus
+                              <FaEye className="text-[12px]" />
+                              View Data
                             </button>
                           </div>
                         </td>
@@ -961,6 +1789,123 @@ export default function DashboardUsers() {
           </div>
         </main>
       </div>
+
+      {showCabangModal && selectedCabang ? (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 px-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl p-6 relative max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-800">
+                  Kinerja Cabang
+                </h2>
+                <p className="text-sm text-gray-500">
+                  {selectedCabang.cabangKantor || "Cabang"}{" "}
+                  {selectedCabang.kodeKantor
+                    ? `(${selectedCabang.kodeKantor})`
+                    : ""}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowCabangModal(false);
+                  setSelectedCabang(null);
+                }}
+                className="text-sm font-semibold text-gray-500 hover:text-gray-700"
+              >
+                Tutup
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-4">
+              <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-3 text-center">
+                <p className="text-xs text-gray-500">Total Nasabah</p>
+                <p className="text-lg font-semibold text-gray-800">
+                  {cabangModalData.total}
+                </p>
+              </div>
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3 text-center">
+                <p className="text-xs text-emerald-700">Approve</p>
+                <p className="text-lg font-semibold text-emerald-700">
+                  {cabangModalData.approve}
+                </p>
+              </div>
+              <div className="rounded-xl border border-rose-100 bg-error-200 px-3 py-3 text-center">
+                <p className="text-xs text-rose-700">Reject</p>
+                <p className="text-lg font-semibold text-rose-700">
+                  {cabangModalData.reject}
+                </p>
+              </div>
+              <div className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-3 text-center">
+                <p className="text-xs text-amber-700">Pending</p>
+                <p className="text-lg font-semibold text-amber-700">
+                  {cabangModalData.pending}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <h3 className="text-sm font-semibold text-gray-800 mb-2">
+                Nasabah Masuk per Bulan
+              </h3>
+              <div className="overflow-x-auto border border-gray-200 rounded-xl">
+                <table className="min-w-full text-sm divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                        Bulan
+                      </th>
+                      <th className="px-4 py-2 text-center text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                        Total
+                      </th>
+                      <th className="px-4 py-2 text-center text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                        Approve
+                      </th>
+                      <th className="px-4 py-2 text-center text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                        Reject
+                      </th>
+                      <th className="px-4 py-2 text-center text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                        Pending
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {cabangModalData.rows.length ? (
+                      cabangModalData.rows.map((row) => (
+                        <tr key={row.month} className="even:bg-gray-50/60">
+                          <td className="px-4 py-2 text-sm text-gray-700">
+                            {row.month}
+                          </td>
+                          <td className="px-4 py-2 text-center text-sm text-gray-700">
+                            {row.total}
+                          </td>
+                          <td className="px-4 py-2 text-center text-sm text-emerald-700 font-semibold">
+                            {row.approve}
+                          </td>
+                          <td className="px-4 py-2 text-center text-sm text-rose-700 font-semibold">
+                            {row.reject}
+                          </td>
+                          <td className="px-4 py-2 text-center text-sm text-amber-700 font-semibold">
+                            {row.pending}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td
+                          colSpan={5}
+                          className="px-4 py-6 text-center text-sm text-gray-400"
+                        >
+                          Belum ada data bulanan untuk cabang ini.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {showCreateModal && (
         <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50 px-4">
@@ -1289,7 +2234,13 @@ const StatCard = ({ title, value, icon, color }) => (
     </div>
     <div>
       <p className="text-sm text-gray-500">{title}</p>
-      <h2 className="text-2xl sm:text-3xl font-bold text-gray-800">
+      <h2
+        className={`font-bold text-gray-800 ${
+          typeof value === "string" && value.length > 14
+            ? "text-sm sm:text-base"
+            : "text-2xl sm:text-3xl"
+        }`}
+      >
         {value}
       </h2>
     </div>

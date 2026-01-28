@@ -29,6 +29,7 @@ export default function UploadPegawai() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [editForm, setEditForm] = useState({
     no: "",
+    originalNo: "",
     namaPegawai: "",
     nrp: "",
     namaJabatan: "",
@@ -177,6 +178,15 @@ export default function UploadPegawai() {
     }
 
     setFile(nextFile);
+    Swal.fire({
+      toast: true,
+      position: "top-end",
+      icon: "success",
+      title: "File berhasil disimpan",
+      showConfirmButton: false,
+      timer: 1200,
+      timerProgressBar: true,
+    });
   };
 
   const handleUpload = async () => {
@@ -228,8 +238,10 @@ export default function UploadPegawai() {
   };
 
   const handleOpenEdit = (row) => {
+    const kodePegawai = row?.kodePegawai || "";
     setEditForm({
-      no: row?.kodePegawai || "",
+      no: kodePegawai,
+      originalNo: kodePegawai,
       namaPegawai: row?.namaPegawai || "",
       nrp: row?.nrp || "",
       namaJabatan: row?.jabatan || "",
@@ -250,17 +262,23 @@ export default function UploadPegawai() {
       Swal.fire("Error", "Kode pegawai tidak ditemukan", "error");
       return;
     }
+    const targetNo = editForm.originalNo || editForm.no;
+    if (!targetNo) {
+      Swal.fire("Error", "Kode pegawai tidak ditemukan", "error");
+      return;
+    }
 
     try {
       setSavingEdit(true);
       const payload = {
+        kode_pegawai: editForm.no,
         Nama_Pegawai: editForm.namaPegawai,
         NRP: editForm.nrp,
         Nama_Jabatan: editForm.namaJabatan,
         kode_kantor: editForm.kodeKantor,
       };
 
-      await axios.patch(API_ENDPOINTS.pegawai.update(editForm.no), payload);
+      await axios.patch(API_ENDPOINTS.pegawai.update(targetNo), payload);
 
       Swal.fire("Berhasil", "Data pegawai diperbarui", "success");
       setIsEditOpen(false);
@@ -537,7 +555,7 @@ export default function UploadPegawai() {
                   <input
                     type="text"
                     value={editForm.no}
-                    readOnly
+                    onChange={handleEditChange("no")}
                     className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600"
                   />
                 </div>

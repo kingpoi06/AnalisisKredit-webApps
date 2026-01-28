@@ -5,7 +5,7 @@ const useClearTokensOnUnload = () => {
     const handleBeforeUnload = () => {
       localStorage.removeItem("accessToken");
       localStorage.removeItem("refreshToken");
-      localStorage.removeItem("pasienId");
+      // localStorage.removeItem("pasienId");
     };
 
     window.addEventListener("beforeunload", handleBeforeUnload);

@@ -95,6 +95,7 @@ const initialFormData = {
   perhitunganBunga: "",
   sumberPengembalian: "",
   caraAngsuranKredit: "",
+  sistemAngsuranKredit: "",
   keteranganUmum: "",
   jenisNasabah: "",
   character: "",
@@ -118,8 +119,6 @@ const initialFormData = {
   stabilitasOmzetUsaha: "",
   ketergantunganPelangganUtama: "",
   statusAgunan: "",
-  capital1: "",
-  capital2: "",
   capacity1: "",
   capacity2: "",
   capacity3: "",
@@ -171,8 +170,75 @@ const initialFormData = {
 
 const MAX_LIST_ITEMS = 5;
 const SLIK_UPLOAD_INDEX = 0;
+const SLIK_JAMINAN_INDEX = 1;
 
 const normalizeKey = (key) => String(key).replace(/_/g, "").toLowerCase();
+
+const looksLikeTxtFileName = (value) =>
+  typeof value === "string" && value.trim().toLowerCase().endsWith(".txt");
+
+const getSlikTextValue = (item) => {
+  const candidates = [
+    item?.slikText,
+    item?.slik_text,
+    item?.slikTxt,
+    item?.sliktext,
+  ];
+  const direct = candidates.find(
+    (value) => typeof value === "string" && value.trim() !== ""
+  );
+  if (direct) return direct.trim();
+  const fallback = item?.slik;
+  if (
+    typeof fallback === "string" &&
+    fallback.trim() !== "" &&
+    !looksLikeTxtFileName(fallback)
+  ) {
+    return fallback.trim();
+  }
+  return "";
+};
+
+const getSlikFileNameValue = (item) => {
+  const candidate = item?.slik;
+  if (typeof candidate === "string" && looksLikeTxtFileName(candidate)) {
+    return candidate.trim();
+  }
+  return "";
+};
+
+const getSlikTextValuePenanggung = (item) => {
+  const candidates = [
+    item?.slikTextPenanggungJawab,
+    item?.slik_text_penanggung_jawab,
+    item?.slikTxtPenanggungJawab,
+    item?.slik_txt_penanggung_jawab,
+    item?.sliktextpenanggungjawab,
+  ];
+  const direct = candidates.find(
+    (value) => typeof value === "string" && value.trim() !== ""
+  );
+  if (direct) return direct.trim();
+  const fallback =
+    item?.slikPenanggungJawab ?? item?.slikPasangan ?? item?.slik_pasangan;
+  if (
+    typeof fallback === "string" &&
+    fallback.trim() !== "" &&
+    !looksLikeTxtFileName(fallback)
+  ) {
+    return fallback.trim();
+  }
+  return "";
+};
+
+const getSlikFileNameValuePenanggung = (item) => {
+  const candidate =
+    item?.slikPenanggungJawab ?? item?.slikPasangan ?? item?.slik_pasangan;
+  if (typeof candidate === "string" && looksLikeTxtFileName(candidate)) {
+    return candidate.trim();
+  }
+  return "";
+};
 
 const ANALISIS_FIELD_MAP = Object.keys(initialFormData).reduce((acc, key) => {
   acc[normalizeKey(key)] = key;
@@ -235,17 +301,18 @@ const computeSum = (values, maxValue) => {
   }, 0);
 };
 
-const SLIK_GRADE_SCORE_MAP = {
-  "Sangat Baik": 30,
-  Baik: 22.5,
-  Cukup: 15,
-  Buruk: 7.5,
-  "Sangat Buruk": 0,
-};
+const SLIK_MAX_SCORE = 30;
+const SLIK_DEBITUR_WEIGHT = 0.8;
+const SLIK_PENANGGUNG_WEIGHT = 0.2;
 
 const formatTwoDecimals = (value) => {
   if (!Number.isFinite(value)) return "";
   return value.toFixed(2);
+};
+
+const formatPercentValue = (value) => {
+  const numericValue = Number.isFinite(value) ? value : 0;
+  return `${formatTwoDecimals(numericValue)}%`;
 };
 
 const formatIdInteger = (value) => {
@@ -265,6 +332,171 @@ const formatIdNumber = (value) => {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(numericValue);
+};
+
+const getFieldValue = (source, keys, fallback = "") => {
+  for (const key of keys) {
+    const value = source?.[key];
+    if (value !== undefined && value !== null) {
+      return value;
+    }
+  }
+  return fallback;
+};
+
+const normalizeAngsuranKey = (value) =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
+const buildAngsuranSummary = (caraAngsuranKredit, sistemAngsuranKredit) => {
+  const cara = String(caraAngsuranKredit ?? "").trim();
+  const sistem = String(sistemAngsuranKredit ?? "").trim();
+  if (!cara && !sistem) return "";
+  if (cara && sistem) return `${sistem} (${cara})`;
+  return cara || sistem;
+};
+
+const isKreditMusimanAngsuran = (caraAngsuranKredit) => {
+  const normalized = normalizeAngsuranKey(caraAngsuranKredit);
+  if (!normalized) return false;
+  if (normalized === "bulanan") return false;
+  return normalized.includes("bulan");
+};
+
+const getIntervalFromCara = (caraAngsuranKredit) => {
+  const normalized = normalizeAngsuranKey(caraAngsuranKredit);
+  if (!normalized) return 1;
+  if (normalized.includes("lebih dari 6")) return 12;
+  if (normalized.includes("6")) return 6;
+  if (normalized.includes("3")) return 3;
+  if (normalized.includes("bulanan") || normalized.includes("bulan")) return 1;
+  return 1;
+};
+
+const getIntervalFromSistem = (sistemAngsuranKredit) => {
+  const normalized = normalizeAngsuranKey(sistemAngsuranKredit);
+  if (!normalized) return null;
+  if (normalized.includes("triwulan")) return 3;
+  if (normalized.includes("semester") || normalized.includes("6 bulan")) return 6;
+  if (normalized.includes("setiap bulan")) return 1;
+  return null;
+};
+
+const buildAngsuranSchedule = ({
+  jangkaWaktuKredit,
+  plafonPermohonan,
+  pokokPerBulan,
+  totalBungaPerbulan,
+  caraAngsuranKredit,
+  sistemAngsuranKredit,
+}) => {
+  const months = Math.max(0, Math.floor(toNumber(jangkaWaktuKredit)));
+  if (!months) return [];
+
+  const intervalFromSistem = getIntervalFromSistem(sistemAngsuranKredit);
+  const intervalFromCara = getIntervalFromCara(caraAngsuranKredit);
+  const interval = intervalFromSistem || intervalFromCara || 1;
+
+  const monthlyPrincipal = toNumber(pokokPerBulan);
+  const monthlyInterest = toNumber(totalBungaPerbulan);
+  const totalPrincipal = toNumber(plafonPermohonan);
+
+  const normalizedSistem = normalizeAngsuranKey(sistemAngsuranKredit);
+  const bayarPokokSaatJt = normalizedSistem.includes("pokok saat jt");
+  const bayarSekaligusSaatJt = normalizedSistem.includes(
+    "dibayar sekaligus saat jt"
+  );
+
+  const rows = [];
+  let monthIndex = 1;
+  let period = 1;
+  while (monthIndex <= months) {
+    const remaining = months - monthIndex + 1;
+    const monthsInPeriod = Math.min(interval, remaining);
+    const startMonth = monthIndex;
+    const endMonth = monthIndex + monthsInPeriod - 1;
+    const isLastPeriod = endMonth === months;
+
+    let principal = 0;
+    let interest = monthlyInterest * monthsInPeriod;
+
+    if (bayarSekaligusSaatJt) {
+      principal = isLastPeriod ? totalPrincipal : 0;
+      interest = isLastPeriod ? monthlyInterest * months : 0;
+    } else if (bayarPokokSaatJt) {
+      principal = isLastPeriod ? totalPrincipal : 0;
+    } else {
+      principal = monthlyPrincipal * monthsInPeriod;
+    }
+
+    rows.push({
+      period,
+      startMonth,
+      endMonth,
+      principal,
+      interest,
+      total: principal + interest,
+    });
+
+    period += 1;
+    monthIndex += monthsInPeriod;
+  }
+
+  return rows;
+};
+
+const buildAngsuranDisplay = ({
+  jangkaWaktuKredit,
+  plafonPermohonan,
+  pokokPerBulan,
+  totalBungaPerbulan,
+  caraAngsuranKredit,
+  sistemAngsuranKredit,
+}) => {
+  const months = Math.max(0, Math.floor(toNumber(jangkaWaktuKredit)));
+  if (!months) {
+    return { label: "Total Angsuran", value: "-" };
+  }
+
+  const intervalFromSistem = getIntervalFromSistem(sistemAngsuranKredit);
+  const intervalFromCara = getIntervalFromCara(caraAngsuranKredit);
+  const interval = intervalFromSistem || intervalFromCara || 1;
+
+  const monthlyPrincipal = toNumber(pokokPerBulan);
+  const monthlyInterest = toNumber(totalBungaPerbulan);
+  const totalPrincipal = toNumber(plafonPermohonan);
+  const totalInterest = monthlyInterest * months;
+
+  const normalizedSistem = normalizeAngsuranKey(sistemAngsuranKredit);
+  const bayarPokokSaatJt = normalizedSistem.includes("pokok saat jt");
+  const bayarSekaligusSaatJt = normalizedSistem.includes(
+    "dibayar sekaligus saat jt"
+  );
+
+  if (bayarSekaligusSaatJt || bayarPokokSaatJt) {
+    return {
+      label: "Total Bayar Saat JT",
+      value: formatIdNumber(totalPrincipal + totalInterest),
+    };
+  }
+
+  const totalPerPeriod = (monthlyPrincipal + monthlyInterest) * interval;
+  const periodLabel =
+    interval === 1 ? "Total Angsuran per Bulan" : `Total Angsuran per ${interval} Bulan`;
+  return {
+    label: periodLabel,
+    value: formatIdNumber(totalPerPeriod),
+  };
+};
+
+const buildJangkaWaktuLabel = ({
+  jangkaWaktuKredit,
+}) => {
+  const base = formatIdInteger(jangkaWaktuKredit);
+  if (!base) return "-";
+  return `${base} Bulan`;
 };
 
 const normalizeJaminanItem = (item) => {
@@ -354,6 +586,14 @@ const getAgunanScoreForItem = (item, status) => {
     if (pengikatan === "SKMHT") return 9;
     return 12;
   }
+  if (jenis === "bpkb") {
+    const pengikatan = String(item?.pengikatan ?? "")
+      .toUpperCase()
+      .replace(/[^A-Z]/g, "");
+    if (pengikatan === "NONFIDUSIA") return 9;
+    if (pengikatan === "FIDUSIA") return 12;
+    return 12;
+  }
   return 15;
 };
 
@@ -418,6 +658,34 @@ const removeSlikStorageEntry = (permohonan, index) => {
   if (!(index in current)) return;
   delete current[index];
   writeSlikStorage(permohonan, current);
+};
+
+const syncSlikFromJaminan = (permohonan, list) => {
+  if (!permohonan) return;
+  const match = list.find(
+    (item) =>
+      String(item?.no_permohonan ?? item?.noPermohonan) ===
+      String(permohonan)
+  );
+  const target = match || list[0];
+  if (!target) {
+    removeSlikStorageEntry(permohonan, SLIK_JAMINAN_INDEX);
+    return;
+  }
+  const slikTextValue = getSlikTextValue(target);
+  if (!slikTextValue) {
+    removeSlikStorageEntry(permohonan, SLIK_JAMINAN_INDEX);
+    return;
+  }
+  const table = parseSlikText(slikTextValue);
+  const fileName = getSlikFileNameValue(target);
+  saveSlikStorageEntry(
+    permohonan,
+    SLIK_JAMINAN_INDEX,
+    table,
+    fileName,
+    "jaminan"
+  );
 };
 
 const parseSlikText = (text) => {
@@ -596,6 +864,39 @@ const parseSlikText = (text) => {
   };
 };
 
+const buildSlikEntriesFromDataDiri = (permohonan, list) => {
+  if (!permohonan) return [];
+  const match = list.find(
+    (item) =>
+      String(item?.no_permohonan ?? item?.noPermohonan) === String(permohonan)
+  );
+  const target = match || list[0];
+  if (!target) return [];
+
+  const entries = [];
+  const nasabahText = getSlikTextValue(target);
+  if (nasabahText) {
+    entries.push({
+      index: 0,
+      fileName: getSlikFileNameValue(target),
+      table: parseSlikText(nasabahText),
+      source: "nasabah",
+    });
+  }
+
+  const penanggungText = getSlikTextValuePenanggung(target);
+  if (penanggungText) {
+    entries.push({
+      index: entries.length,
+      fileName: getSlikFileNameValuePenanggung(target),
+      table: parseSlikText(penanggungText),
+      source: "penanggung",
+    });
+  }
+
+  return entries;
+};
+
 const normalizeSlikKey = (value) =>
   String(value ?? "")
     .toLowerCase()
@@ -609,6 +910,43 @@ const parseSlikAmount = (value) => {
 const parseSlikKualitas = (value) => {
   const match = String(value ?? "").match(/\b([1-5])\b/);
   return match ? Number(match[1]) : null;
+};
+
+const resolveSlikGrade = (kualitasValues, lastKualitas) => {
+  if (!Array.isArray(kualitasValues) || kualitasValues.length === 0) {
+    return { gradeLabel: "", scorePercent: 0 };
+  }
+
+  const has1 = kualitasValues.includes(1);
+  const has2 = kualitasValues.includes(2);
+  const has345 = kualitasValues.some((value) => value >= 3);
+  const all1 = has1 && !has2 && !has345;
+  const only12 = !has345;
+
+  if (all1) {
+    return { gradeLabel: "Sangat Baik", scorePercent: 100 };
+  }
+
+  if (lastKualitas === 1 && !has345) {
+    return { gradeLabel: "Baik", scorePercent: 75 };
+  }
+
+  if (
+    (lastKualitas === 1 && (has2 || has345)) ||
+    (lastKualitas === 2 && has1 && only12)
+  ) {
+    return { gradeLabel: "Cukup", scorePercent: 50 };
+  }
+
+  if (lastKualitas === 2 && !has1) {
+    return { gradeLabel: "Buruk", scorePercent: 25 };
+  }
+
+  if (!has1) {
+    return { gradeLabel: "Sangat Buruk", scorePercent: 0 };
+  }
+
+  return { gradeLabel: "Cukup", scorePercent: 50 };
 };
 
 const findRowValueByPatterns = (rowMap, patterns) => {
@@ -719,6 +1057,18 @@ const parseSlikDateValue = (value) => {
   return parsed;
 };
 
+const getSlikRowDate = (rowMap) => {
+  const dateValue = findRowValueByPatterns(rowMap, [
+    "tanggaljatuhtempo",
+    "tgljatuhtempo",
+    "tanggalakadawal",
+    "tglakadawal",
+    "tanggalmulai",
+    "tglmulai",
+  ]);
+  return parseSlikDateValue(dateValue);
+};
+
 const formatSlikDateShort = (value) => {
   const date = parseSlikDateValue(value);
   if (!date) return String(value ?? "").trim();
@@ -777,10 +1127,13 @@ const computeSlikSummary = (entries) => {
   const kualitasCounts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
   let kualitasKet1 = "";
   let hasTunggakan = false;
+  let lastKualitas = null;
+  let lastDate = null;
+  let lastIndex = -1;
 
   entries.forEach((entry) => {
     const rowMaps = buildSlikRowMaps(entry?.table);
-    rowMaps.forEach((row) => {
+    rowMaps.forEach((row, rowIndex) => {
       if (!hasSlikRowData(row)) return;
       totalAktivitas += 1;
       const kualitasValue = findRowValueByPatterns(row, ["kualitas"]);
@@ -795,6 +1148,16 @@ const computeSlikSummary = (entries) => {
             findRowValueByPatterns(row, ["kualitasket"]) ?? ""
           ).trim();
           if (ketValue) kualitasKet1 = ketValue;
+        }
+        const rowDate = getSlikRowDate(row);
+        if (rowDate) {
+          if (!lastDate || rowDate > lastDate) {
+            lastDate = rowDate;
+            lastKualitas = kualitasNumber;
+          }
+        } else if (!lastDate && rowIndex >= lastIndex) {
+          lastIndex = rowIndex;
+          lastKualitas = kualitasNumber;
         }
       }
 
@@ -813,119 +1176,117 @@ const computeSlikSummary = (entries) => {
   });
 
   const totalAktivitasLabel = totalAktivitas ? String(totalAktivitas) : "";
-
   const totalKualitas = kualitasValues.length;
-  const kualitasSatu = kualitasValues.filter((value) => value === 1).length;
-  const percentKualitas1 = totalKualitas
-    ? (kualitasSatu / totalKualitas) * 100
-    : 0;
-  const hasQuality345 = kualitasValues.some((value) => value >= 3);
-
-  let gradeLabel = "";
-  if (totalKualitas) {
-    if (percentKualitas1 >= 85) {
-      gradeLabel = "Sangat Baik";
-    } else if (
-      percentKualitas1 >= 70 &&
-      percentKualitas1 < 85 &&
-      !hasQuality345
-    ) {
-      gradeLabel = "Baik";
-    } else if (percentKualitas1 >= 50) {
-      gradeLabel = "Cukup";
-    } else if (percentKualitas1 >= 25) {
-      gradeLabel = "Buruk";
-    } else {
-      gradeLabel = "Sangat Buruk";
-    }
-  }
-
-  let statusSlik = "";
-  if (gradeLabel) {
-    statusSlik =
-      gradeLabel.startsWith("Sangat Baik") || gradeLabel.startsWith("Baik")
-        ? "Approve"
-        : "Reject";
-  }
+  const { gradeLabel, scorePercent } = resolveSlikGrade(
+    kualitasValues,
+    lastKualitas
+  );
 
   return {
     totalAktivitas,
     totalAktivitasLabel,
-    statusSlik,
     gradeLabel,
+    scorePercent,
     totalKualitas,
     kualitasCounts,
     kualitasKet1,
     hasTunggakan,
-    hasQuality345,
-    percentKualitas1,
+    lastKualitas,
+    hasData: totalKualitas > 0,
   };
 };
 
-const buildSlikNarrative = (summary) => {
-  if (!summary || !summary.totalAktivitas) return "";
+const buildSlikNarrative = ({
+  nasabahSummary,
+  penanggungSummary,
+  nasabahPercent,
+  penanggungPercent,
+  combinedPercent,
+  totalScore,
+}) => {
+  const hasNasabah = Boolean(nasabahSummary?.hasData);
+  const hasPenanggung = Boolean(penanggungSummary?.hasData);
+  if (!hasNasabah && !hasPenanggung) return "";
 
-  const totalAktivitas = summary.totalAktivitas;
-  const totalKualitas = summary.totalKualitas ?? 0;
-  const kualitasCounts = summary.kualitasCounts ?? {};
-  const kualitas1 = kualitasCounts[1] ?? 0;
-  const nonOneCount = totalKualitas ? totalKualitas - kualitas1 : 0;
-  const kualitasKet1Label =
-    summary.kualitasKet1 ||
-    (totalKualitas && kualitas1 === totalKualitas ? "Lancar" : "");
-  const kualitas1Label = kualitasKet1Label
-    ? `1 (${kualitasKet1Label})`
-    : "1";
-  const fasilitasLabel =
-    totalAktivitas === 1
-      ? "1 fasilitas kredit"
-      : `${totalAktivitas} fasilitas kredit`;
+  const getHighestKualitas = (summary) => {
+    const counts = summary?.kualitasCounts;
+    if (!counts) return null;
+    for (let i = 5; i >= 1; i -= 1) {
+      if ((counts[i] ?? 0) > 0) return i;
+    }
+    return null;
+  };
 
-  let firstSentence = "";
-  if (!totalKualitas) {
-    firstSentence = `Berdasarkan hasil pengecekan SLIK, debitur memiliki ${fasilitasLabel} dengan rincian kolektibilitas belum lengkap.`;
-  } else if (kualitas1 === totalKualitas) {
-    firstSentence = `Berdasarkan hasil pengecekan SLIK, debitur memiliki ${fasilitasLabel} yang seluruhnya tercatat dengan kolektibilitas ${kualitas1Label}.`;
-  } else {
-    const breakdownParts = [];
-    [1, 2, 3, 4, 5].forEach((kualitas) => {
-      const count = kualitasCounts[kualitas] ?? 0;
-      if (!count) return;
-      const label = kualitas === 1 ? kualitas1Label : `${kualitas}`;
-      breakdownParts.push(`kolektibilitas ${label} sebanyak ${count}`);
+  const getKolektibilitasNote = (summary) => {
+    const highest = getHighestKualitas(summary);
+    if (!highest) return "Rincian kolektibilitas belum lengkap.";
+    if (highest === 1) return "Seluruh riwayat berada pada KOL 1.";
+    if (highest === 2) return "Terdapat riwayat KOL 2 tanpa KOL 3-5.";
+    return `Terdapat catatan hingga KOL ${highest}.`;
+  };
+
+  const getTunggakanNote = (summary) =>
+    summary?.hasTunggakan
+      ? "Ada tunggakan yang perlu diperhatikan."
+      : "Tidak ada tunggakan yang terdeteksi.";
+
+  const buildPartySentence = (summary, label) => {
+    if (!summary?.hasData) return `${label} belum memiliki data SLIK.`;
+    const fasilitasLabel =
+      summary.totalAktivitas === 1
+        ? "1 fasilitas kredit"
+        : `${summary.totalAktivitas} fasilitas kredit`;
+    const lastKol = summary.lastKualitas
+      ? `KOL terakhir ${summary.lastKualitas}`
+      : "KOL terakhir belum terbaca";
+    const gradeLabel = summary.gradeLabel
+      ? `Penilaian ${summary.gradeLabel}.`
+      : "";
+    return [
+      `${label} memiliki ${fasilitasLabel} dengan ${lastKol}.`,
+      getKolektibilitasNote(summary),
+      getTunggakanNote(summary),
+      gradeLabel,
+    ]
+      .filter(Boolean)
+      .join(" ");
+  };
+
+  const getOverallGradeLabel = (percent) => {
+    if (!Number.isFinite(percent)) return "";
+    const steps = [0, 25, 50, 75, 100];
+    let nearest = steps[0];
+    steps.forEach((step) => {
+      if (Math.abs(percent - step) < Math.abs(percent - nearest)) {
+        nearest = step;
+      }
     });
-    const breakdownText = breakdownParts.length
-      ? breakdownParts.join(", ")
-      : "rincian kolektibilitas belum lengkap";
-    firstSentence = `Berdasarkan hasil pengecekan SLIK, debitur memiliki ${fasilitasLabel} dengan ${breakdownText}.`;
+    const labels = {
+      0: "Sangat Buruk",
+      25: "Buruk",
+      50: "Cukup",
+      75: "Baik",
+      100: "Sangat Baik",
+    };
+    return labels[nearest] || "";
+  };
+
+  const sentences = [
+    buildPartySentence(nasabahSummary, "Debitur"),
+    buildPartySentence(penanggungSummary, "Penanggung jawab"),
+  ];
+
+  const overallGrade = getOverallGradeLabel(combinedPercent);
+  if (overallGrade) {
+    sentences.push(
+      `Berdasarkan riwayat debitur dan penanggung jawab, dapat dikatakan bahwa kualitas SLIK secara keseluruhan ${overallGrade}.`
+    );
   }
 
-  let tunggakanSentence = "";
-  if (summary.hasTunggakan) {
-    tunggakanSentence = "Terdapat tunggakan yang perlu menjadi perhatian.";
-  } else if (totalKualitas && nonOneCount > 0) {
-    tunggakanSentence =
-      "Terdapat catatan kolektibilitas di atas 1 yang perlu diperhatikan.";
-  } else {
-    tunggakanSentence = "Tidak terdapat tunggakan maupun catatan negatif.";
-  }
-
-  let kelayakanSentence = "";
-  if (summary.gradeLabel) {
-    const gradeLower = summary.gradeLabel.toLowerCase();
-    const statusPhrase =
-      summary.statusSlik === "Approve"
-        ? "memenuhi kriteria kelayakan"
-        : "perlu pertimbangan lebih lanjut";
-    kelayakanSentence = `Riwayat kredit debitur dinilai ${gradeLower} sehingga ${statusPhrase}.`;
-  }
-
-  return [firstSentence, tunggakanSentence, kelayakanSentence]
-    .filter(Boolean)
-    .join(" ");
+  return sentences.filter(Boolean).join(" ");
 };
 
-const renderSlikSummaryTable = (entries) => {
+const renderSlikSummaryTable = (entries, title) => {
   const rows = buildSlikSummaryRows(entries);
   if (!rows.length) {
     return (
@@ -955,7 +1316,7 @@ const renderSlikSummaryTable = (entries) => {
         <div className="flex flex-col gap-2 border-b border-slate-200/80 px-5 py-4 text-center sm:flex-row sm:items-center sm:justify-between sm:text-left">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-black">
-              Ringkasan Data SLIK
+              {title || "Ringkasan Data SLIK"}
             </p>
             <p className="text-xs text-black">
               Total Aktivitas: {rows.length}
@@ -1170,13 +1531,16 @@ const renderSlikTable = (slikTable, meta = {}) => {
     return `${day}-${month}-${year}`;
   };
 
-  const computeDayDiff = (startValue, endValue) => {
+  const computeMonthDiff = (startValue, endValue) => {
     const startDate = parseDateValue(startValue);
     const endDate = parseDateValue(endValue);
     if (!startDate || !endDate) return "";
     const diffMs = endDate.getTime() - startDate.getTime();
+    if (diffMs < 0) return "";
     const diffDays = Math.round(diffMs / (24 * 60 * 60 * 1000));
-    return diffDays >= 0 ? String(diffDays) : "";
+    if (!diffDays) return "";
+    const diffMonths = Math.max(1, Math.ceil(diffDays / 30));
+    return String(diffMonths);
   };
 
   const formatMoneyCell = (value) => {
@@ -1249,7 +1613,7 @@ const renderSlikTable = (slikTable, meta = {}) => {
       getValue: (row, fallbackIndex) => {
         const start = getFieldValue(row, "tanggalAkadAwal");
         const end = getFieldValue(row, "tanggalJatuhTempo");
-        const diff = computeDayDiff(start, end);
+        const diff = computeMonthDiff(start, end);
         if (diff !== "") return diff;
         return getFieldValue(row, null, fallbackIndex);
       },
@@ -1774,37 +2138,36 @@ const computeAngsuranDariMpk = ({
   return formatTwoDecimals(mpk / months + mpk * rate);
 };
 
-const computeRepaymentCapacity = (angsuranPembiayaan, totalLaba) => {
-  if (angsuranPembiayaan === "" || totalLaba === "") {
+const computeRepaymentCapacity = (
+  nilaiRpc,
+  hasilPendapatanSetelahDikurangiPembiayaan
+) => {
+  if (nilaiRpc === "" || hasilPendapatanSetelahDikurangiPembiayaan === "") {
     return "";
   }
 
-  const laba = toNumber(totalLaba);
-  if (laba <= 0) return "";
+  const rpc = toNumber(nilaiRpc);
+  const hasilPendapatan = toNumber(
+    hasilPendapatanSetelahDikurangiPembiayaan
+  );
+  if (rpc <= 0 || hasilPendapatan <= 0) return "";
 
-  const denominator = laba * 0.5;
-  if (denominator <= 0) return "";
-
-  return formatTwoDecimals(toNumber(angsuranPembiayaan) / denominator);
+  return formatTwoDecimals(rpc / hasilPendapatan);
 };
 
 const computeRepaymentCapacityStatus = (
-  repaymentCapacity,
-  kemampuanMembayarSetelahPembiayaan
+  labaNettoNonOperasional,
+  angsuranPembiayaan
 ) => {
-  if (repaymentCapacity === "" && kemampuanMembayarSetelahPembiayaan === "") {
+  if (labaNettoNonOperasional === "" && angsuranPembiayaan === "") {
     return "";
   }
 
-  if (
-    kemampuanMembayarSetelahPembiayaan !== "" &&
-    toNumber(kemampuanMembayarSetelahPembiayaan) < 0
-  ) {
-    return "Reject";
-  }
+  const laba = toNumber(labaNettoNonOperasional);
+  const angsuran = toNumber(angsuranPembiayaan);
+  if (!laba || !angsuran) return "";
 
-  if (repaymentCapacity === "") return "";
-  return toNumber(repaymentCapacity) > 0.5 ? "Reject" : "Approve";
+  return laba < angsuran ? "Reject" : "Approve";
 };
 
 const normalizeList = (data) => {
@@ -1826,7 +2189,6 @@ const { no_permohonan: noPermohonanParam } = useParams();
 const [formData, setFormData] = useState(initialFormData);
 const [noPermohonan, setNoPermohonan] = useState(noPermohonanParam ?? "");
 const [loadingNoPermohonan, setLoadingNoPermohonan] = useState(false);
-const [capitalItems, setCapitalItems] = useState([]);
 const [operasionalItems, setOperasionalItems] = useState([]);
 const [nonOperasionalItems, setNonOperasionalItems] = useState([]);
 const [hutangItems, setHutangItems] = useState([]);
@@ -1836,22 +2198,76 @@ const [jaminanList, setJaminanList] = useState([]);
 
   const isKreditKonsumtif = isKreditKonsumtifPegawai(formData.jenisKredit);
   const isKreditModalKerja = isKreditModalKerjaType(formData.jenisKredit);
-  const slikSummary = computeSlikSummary(slikEntries);
-  const hasSlikFromJaminan = slikEntries.some((entry) => {
-    const hasData = entry.fileName || entry.table?.rows?.length;
-    return hasData && entry.source !== "analisis";
+  const nasabahSlikEntries = slikEntries.filter(
+    (entry) => entry.source === "nasabah"
+  );
+  const penanggungSlikEntries = slikEntries.filter(
+    (entry) => entry.source === "penanggung"
+  );
+  const nasabahSlikSummary = computeSlikSummary(nasabahSlikEntries);
+  const penanggungSlikSummary = computeSlikSummary(penanggungSlikEntries);
+  const nasabahSlikEntry = nasabahSlikEntries[0] || null;
+  const penanggungSlikEntry = penanggungSlikEntries[0] || null;
+  const hasAnySlikEntry = Boolean(nasabahSlikEntry || penanggungSlikEntry);
+  const angsuranSummary = buildAngsuranSummary(
+    formData.caraAngsuranKredit,
+    formData.sistemAngsuranKredit
+  );
+  const isKreditMusiman = isKreditMusimanAngsuran(
+    formData.caraAngsuranKredit
+  );
+  const jangkaWaktuLabel = buildJangkaWaktuLabel({
+    jangkaWaktuKredit: formData.jangkaWaktuKredit,
+  });
+  const angsuranScheduleRows = buildAngsuranSchedule({
+    jangkaWaktuKredit: formData.jangkaWaktuKredit,
+    plafonPermohonan: formData.plafonPermohonan,
+    pokokPerBulan: formData.pokokPerBulan,
+    totalBungaPerbulan: formData.totalBungaPerbulan,
+    caraAngsuranKredit: formData.caraAngsuranKredit,
+    sistemAngsuranKredit: formData.sistemAngsuranKredit,
+  });
+  const angsuranDisplay = buildAngsuranDisplay({
+    jangkaWaktuKredit: formData.jangkaWaktuKredit,
+    plafonPermohonan: formData.plafonPermohonan,
+    pokokPerBulan: formData.pokokPerBulan,
+    totalBungaPerbulan: formData.totalBungaPerbulan,
+    caraAngsuranKredit: formData.caraAngsuranKredit,
+    sistemAngsuranKredit: formData.sistemAngsuranKredit,
   });
   const hubunganBankLainValue = String(formData.jenisNasabah ?? "").trim();
-  const isHubunganBankLainAda =
-    hubunganBankLainValue.toLowerCase() === "ada";
-  const shouldShowSlikUpload = isHubunganBankLainAda && !hasSlikFromJaminan;
-  const analisisSlikEntry = slikEntries.find(
-    (entry) => entry.source === "analisis"
-  );
-  const hasSlikRows = slikEntries.some(
-    (entry) => entry.table?.rows?.length
-  );
-  const hasSlikUpload = Boolean(analisisSlikEntry?.fileName);
+  const hubunganBankLainNormalized = hubunganBankLainValue
+    .toLowerCase()
+    .replace(/\s+/g, "");
+  const isHubunganBankLainAda = hubunganBankLainNormalized === "ada";
+  const isHubunganBankLainTidakAda =
+    hubunganBankLainNormalized === "tidakada" ||
+    hubunganBankLainNormalized === "tidak";
+  const showSlikNarrative =
+    hasAnySlikEntry || isHubunganBankLainAda || isHubunganBankLainTidakAda;
+  const fallbackSlikPercent = isHubunganBankLainTidakAda ? 100 : 0;
+  const nasabahSlikPercent = nasabahSlikSummary.hasData
+    ? nasabahSlikSummary.scorePercent
+    : fallbackSlikPercent;
+  const penanggungSlikPercent = penanggungSlikSummary.hasData
+    ? penanggungSlikSummary.scorePercent
+    : fallbackSlikPercent;
+  const combinedSlikPercent =
+    nasabahSlikPercent * SLIK_DEBITUR_WEIGHT +
+    penanggungSlikPercent * SLIK_PENANGGUNG_WEIGHT;
+  const slikScore = (combinedSlikPercent / 100) * SLIK_MAX_SCORE;
+  const handleGenerateSlikNarrative = () => {
+    const narrative = buildSlikNarrative({
+      nasabahSummary: nasabahSlikSummary,
+      penanggungSummary: penanggungSlikSummary,
+      nasabahPercent: nasabahSlikPercent,
+      penanggungPercent: penanggungSlikPercent,
+      combinedPercent: combinedSlikPercent,
+      totalScore: slikScore,
+    });
+    if (!narrative) return;
+    setFormData((prev) => ({ ...prev, character: narrative }));
+  };
   const characterValues = [
     formData.statusKepemilikanTempatTinggal,
     formData.lamaTinggalAlamatSaatIni,
@@ -1940,6 +2356,8 @@ const [jaminanList, setJaminanList] = useState([]);
   const isAgunanEmpty =
     !jaminanList.length ||
     jaminanList.every((item) => !hasInputValue(item?.jenisjaminan));
+  const plafonPermohonanValue = toNumber(formData.plafonPermohonan);
+  const requiresAgunan = plafonPermohonanValue > 40000000;
   const hasAgunanApprove = jaminanEvaluations.some(
     (item) => String(item.status).toLowerCase() === "approve"
   );
@@ -1947,14 +2365,18 @@ const [jaminanList, setJaminanList] = useState([]);
     (item) => String(item.status).toLowerCase() === "reject"
   );
   const agunanStatusLabel = isAgunanEmpty
-    ? "Approve"
+    ? requiresAgunan
+      ? "Reject"
+      : "Approve"
     : hasAgunanApprove
     ? "Approve"
     : hasAgunanReject
     ? "Reject"
     : "";
   const agunanScore = isAgunanEmpty
-    ? 15
+    ? requiresAgunan
+      ? 0
+      : 15
     : hasAgunanApprove
     ? jaminanEvaluations.reduce(
         (maxValue, item) => Math.max(maxValue, item.score),
@@ -1963,10 +2385,6 @@ const [jaminanList, setJaminanList] = useState([]);
     : 0;
   const rpcStatusLabel = String(formData.repaymentCapacityStatus ?? "").trim();
   const rpcScore = rpcStatusLabel.toLowerCase() === "approve" ? 40 : 0;
-  const slikGradeLabel = String(slikSummary.gradeLabel ?? "").trim();
-  const slikScore = isHubunganBankLainAda
-    ? SLIK_GRADE_SCORE_MAP[slikGradeLabel] ?? 0
-    : 30;
   const totalBobotScore =
     agunanScore + totalStatusScore + rpcScore + slikScore;
   const agunanScoreLabel = formatPercent(agunanScore);
@@ -1982,19 +2400,6 @@ const [jaminanList, setJaminanList] = useState([]);
       : statusPengajuan === "Approve"
       ? "!border-success-500 !bg-green-50 !text-success-900"
       : "";
-  const handleGenerateSlikNarrative = () => {
-    const narrative = buildSlikNarrative(slikSummary);
-    if (!narrative) return;
-    setFormData((prev) => ({ ...prev, character: narrative }));
-  };
-
-  useEffect(() => {
-    const formattedCapital = formatLineItems(capitalItems);
-    setFormData((prev) => {
-      if (prev.capital1 === formattedCapital) return prev;
-      return { ...prev, capital1: formattedCapital };
-    });
-  }, [capitalItems]);
 
   useEffect(() => {
     if (isKreditKonsumtif || !operasionalItems.length) return;
@@ -2339,12 +2744,12 @@ const [jaminanList, setJaminanList] = useState([]);
       jangkaWaktuKredit: formData.jangkaWaktuKredit,
     });
     const computedRepaymentCapacity = computeRepaymentCapacity(
-      formData.angsuranPembiayaan,
+      computedNilaiRpc,
       computedLabaNettoNonOperasional
     );
     const computedRepaymentStatus = computeRepaymentCapacityStatus(
-      computedRepaymentCapacity,
-      computedKemampuanMembayar
+      computedLabaNettoNonOperasional,
+      formData.angsuranPembiayaan
     );
 
     setFormData((prev) => {
@@ -2448,6 +2853,21 @@ const fetchDataPermohonan = async (requestNo) => {
     const resolvedJenisKredit = resolveJenisKreditLabel(rawJenis);
 
     setFormData((prev) => {
+      const caraAngsuranKredit = getFieldValue(
+        permohonan,
+        ["caraAngsuranKredit", "cara_angsuran_kredit"],
+        prev.caraAngsuranKredit
+      );
+      const sistemAngsuranKredit = getFieldValue(
+        permohonan,
+        [
+          "sistemAngsuranKredit",
+          "sistem_angsuran_kredit",
+          "sistemAngsuran",
+          "sistem_angsuran",
+        ],
+        prev.sistemAngsuranKredit
+      );
       const next = {
         ...prev,
         jenisKredit: resolvedJenisKredit || prev.jenisKredit,
@@ -2457,6 +2877,8 @@ const fetchDataPermohonan = async (requestNo) => {
         sukuBungaTahun: permohonan.sukuBungaTahun ?? prev.sukuBungaTahun,
         perhitunganBunga:
           permohonan.perhitunganBunga ?? prev.perhitunganBunga,
+        caraAngsuranKredit,
+        sistemAngsuranKredit,
       };
 
       if (
@@ -2464,7 +2886,9 @@ const fetchDataPermohonan = async (requestNo) => {
         prev.plafonPermohonan === next.plafonPermohonan &&
         prev.jangkaWaktuKredit === next.jangkaWaktuKredit &&
         prev.sukuBungaTahun === next.sukuBungaTahun &&
-        prev.perhitunganBunga === next.perhitunganBunga
+        prev.perhitunganBunga === next.perhitunganBunga &&
+        prev.caraAngsuranKredit === next.caraAngsuranKredit &&
+        prev.sistemAngsuranKredit === next.sistemAngsuranKredit
       ) {
         return prev;
       }
@@ -2539,7 +2963,8 @@ const fetchDataJaminan = async (requestNo) => {
       response.data?.Data ?? response.data?.data ?? response.data
     );
     const filtered = filterByPermohonan(list);
-    const mapped = (filtered.length ? filtered : list).map(normalizeJaminanItem);
+    const scopedList = filtered.length ? filtered : list;
+    const mapped = scopedList.map(normalizeJaminanItem);
     setJaminanList(mapped);
   } catch (error) {
     try {
@@ -2550,11 +2975,45 @@ const fetchDataJaminan = async (requestNo) => {
         response.data?.Data ?? response.data?.data ?? response.data
       );
       const filtered = filterByPermohonan(list);
-      setJaminanList(filtered.map(normalizeJaminanItem));
+      const scopedList = filtered.length ? filtered : list;
+      setJaminanList(scopedList.map(normalizeJaminanItem));
     } catch (innerError) {
       Swal.fire(
         "Gagal",
         innerError.response?.data?.msg || "Gagal mengambil data jaminan",
+        "error"
+      );
+    }
+  }
+};
+
+const fetchDataDiri = async (requestNo) => {
+  if (!requestNo) {
+    setSlikEntries([]);
+    return;
+  }
+
+  const applySlik = (data) => {
+    const list = normalizeList(data);
+    const entries = buildSlikEntriesFromDataDiri(requestNo, list);
+    setSlikEntries(entries);
+  };
+
+  try {
+    const response = await axios.get(
+      API_ENDPOINTS.datanasabah.dataDiri.detail(requestNo)
+    );
+    applySlik(response.data?.Data ?? response.data?.data ?? response.data);
+  } catch (error) {
+    try {
+      const response = await axios.get(
+        API_ENDPOINTS.datanasabah.dataDiri.list()
+      );
+      applySlik(response.data?.Data ?? response.data?.data ?? response.data);
+    } catch (innerError) {
+      Swal.fire(
+        "Gagal",
+        innerError.response?.data?.msg || "Gagal mengambil data diri",
         "error"
       );
     }
@@ -2605,7 +3064,7 @@ const fetchDataJaminan = async (requestNo) => {
       setSlikEntries([]);
       return;
     }
-    setSlikEntries(readSlikStorageEntries(requestNo));
+    fetchDataDiri(requestNo);
   }, [noPermohonanParam, noPermohonan]);
 
   useEffect(() => {
@@ -2682,28 +3141,6 @@ const handleSlikFileChange = (event) => {
     Swal.fire("Error", "Gagal membaca file SLIK", "error");
   };
   reader.readAsText(file);
-};
-
-const handleAddCapitalItem = () => {
-  setCapitalItems((prev) => {
-    if (prev.length >= MAX_LIST_ITEMS) return prev;
-    return [...prev, { keterangan: "", nilai: "" }];
-  });
-};
-
-const handleRemoveCapitalItem = () => {
-  setCapitalItems((prev) => (prev.length ? prev.slice(0, -1) : prev));
-};
-
-const handleCapitalItemChange = (index, field) => (event) => {
-  const rawValue = event.target.value;
-  const nextValue = field === "nilai" ? rawValue.replace(/\D/g, "") : rawValue;
-
-  setCapitalItems((prev) => {
-    const next = [...prev];
-    next[index] = { ...next[index], [field]: nextValue };
-    return next;
-  });
 };
 
 const handleAddOperasionalItem = () => {
@@ -2867,9 +3304,6 @@ const handleSave = async () => {
     catatanPengajuan: shouldShowCatatanPengajuan
       ? formData.catatanPengajuan
       : "",
-    capital1: capitalItems.length
-      ? formatLineItems(capitalItems)
-      : formData.capital1,
     ...(operasionalTotals
       ? {
           biayaOperasional: operasionalTotals.total,
@@ -2971,35 +3405,30 @@ const handleSave = async () => {
 
             <Card title="WATAK / KARAKTER (Character)" icon={<FaMapMarkerAlt />}>
               <div className="space-y-4">
-                {renderSlikSummaryTable(slikEntries)}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <Select
-                    label="Hubungan Nasabah Dengan Bank Lain"
-                    value={formData.jenisNasabah}
-                    onChange={handleFieldChange("jenisNasabah")}
-                  >
-                    <option value="">Pilih Hubungan</option>
-                    <option value="Ada">Ada</option>
-                    <option value="Tidak Ada">Tidak Ada</option>
-                  </Select>
-                  <p className="text-[11px] text-slate-500 md:col-span-2">
-                    Otomatis terisi dari Data Jaminan (Hubungan dengan Bank Lain).
-                  </p>
-                </div>
-                {shouldShowSlikUpload ? (
+                {nasabahSlikEntry ? (
                   <div className="space-y-2">
-                    <Input
-                      label="Upload SLIK (TXT)"
-                      type="file"
-                      accept=".txt,text/plain"
-                      onChange={handleSlikFileChange}
-                    />
-                    <div className="text-[11px] text-slate-500">
-                      {analisisSlikEntry?.fileName || "Belum ada file SLIK"}
-                    </div>
+                    <p className="text-[11px] font-semibold text-slate-600 uppercase tracking-wide">
+                      Rekapitulasi Cek IDEB/SLIK Data Nasabah
+                    </p>
+                    {renderSlikTable(nasabahSlikEntry.table, {
+                      fileName: nasabahSlikEntry.fileName,
+                      namaDebitur: nasabahSlikEntry.table?.meta?.namaDebitur,
+                    })}
                   </div>
                 ) : null}
-                {isHubunganBankLainAda ? (
+                {penanggungSlikEntry ? (
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-semibold text-slate-600 uppercase tracking-wide">
+                      Data SLIK Penanggung Jawab
+                    </p>
+                    {renderSlikTable(penanggungSlikEntry.table, {
+                      fileName: penanggungSlikEntry.fileName,
+                      namaDebitur:
+                        penanggungSlikEntry.table?.meta?.namaDebitur,
+                    })}
+                  </div>
+                ) : null}
+                {showSlikNarrative ? (
                   <div className="space-y-1">
                     <div className="flex items-center justify-between">
                       <label className="text-[11px] font-semibold text-gray-500">
@@ -3342,70 +3771,6 @@ const handleSave = async () => {
                     </div>
                   </>
                 )}
-                <div className="md:col-span-2 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[11px] font-semibold text-gray-500">
-                      Adapun Modal dan Asset yang dimiliki saat ini berupa
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleRemoveCapitalItem}
-                        disabled={!capitalItems.length}
-                        className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 text-sm font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                        aria-label="Kurangi modal atau asset"
-                        title="Kurangi modal atau asset"
-                      >
-                        -
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleAddCapitalItem}
-                        disabled={capitalItems.length >= MAX_LIST_ITEMS}
-                        className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 text-sm font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                        aria-label="Tambah modal atau asset"
-                        title="Tambah modal atau asset"
-                      >
-                        +
-                      </button>
-                    </div>
-                  </div>
-                  {capitalItems.length ? (
-                    <div className="space-y-3">
-                      {capitalItems.map((item, itemIndex) => (
-                        <div
-                          key={itemIndex}
-                          className="grid grid-cols-2 gap-3"
-                        >
-                          <Input
-                            label="Keterangan Modal/Asset"
-                            value={item.keterangan}
-                            onChange={handleCapitalItemChange(
-                              itemIndex,
-                              "keterangan"
-                            )}
-                            placeholder="Contoh: Rumah Tempat Tinggal"
-                          />
-                          <Input
-                            label="Nilai Modal/Asset"
-                            type="text"
-                            value={formatIdInteger(item.nilai)}
-                            onChange={handleCapitalItemChange(
-                              itemIndex,
-                              "nilai"
-                            )}
-                            inputMode="numeric"
-                            placeholder="Contoh: 250000000"
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-[11px] text-slate-500">
-                      Klik tombol + untuk menambah modal atau asset.
-                    </p>
-                  )}
-                </div>
               </div>
             </Card>
             <Card title="KEMAMPUAN (Capasity)" icon={<FaMapMarkerAlt />}>
@@ -4155,12 +4520,6 @@ const handleSave = async () => {
                   readOnly
                 />
                 <Input
-                  label="Repayment Capacity"
-                  type="text"
-                  value={formatIdNumber(formData.repaymentCapacity)}
-                  readOnly
-                />
-                <Input
                   label="Nilai RPC (Repayment Capacity)"
                   type="text"
                   value={formatIdNumber(formData.nilaiRpc)}
@@ -4231,14 +4590,110 @@ const handleSave = async () => {
                     </span>{" "}
                     Jangka Waktu{" "}
                     <span className="font-semibold">
-                      {formatIdInteger(formData.jangkaWaktuKredit) || "-"}
+                      {jangkaWaktuLabel}
                     </span>{" "}
-                    Bulan ({formData.perhitunganBunga || "-"}).
+                    ({formData.perhitunganBunga || "-"}).
                   </p>
-                  <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <div className="rounded-md bg-gray-50 px-2 py-1">
-                      <span className="text-[10px] text-gray-500">Pokok</span>
-                      <div className="font-semibold">
+                {angsuranSummary ? (
+                  <p className="mt-1">
+                    Sistem Angsuran
+                    {isKreditMusiman ? " (Kredit Musiman)" : ""}:{" "}
+                    <span className="font-semibold">{angsuranSummary}</span>
+                  </p>
+                ) : null}
+                <div className="mt-2 text-[11px] text-slate-600">
+                  <span className="font-semibold text-slate-700">
+                    {angsuranDisplay.label}:
+                  </span>{" "}
+                  Rp {angsuranDisplay.value || "-"}
+                </div>
+                <div className="mt-3 overflow-hidden rounded-md border border-slate-200 bg-white">
+                  <table className="w-full text-[11px]">
+                    <thead className="bg-slate-50 text-slate-600">
+                      <tr>
+                        <th className="px-2 py-1 text-left font-semibold">
+                          Jangka Waktu
+                        </th>
+                        <th className="px-2 py-1 text-left font-semibold">
+                          Cara Angsuran
+                        </th>
+                        <th className="px-2 py-1 text-left font-semibold">
+                          Sistem Angsuran
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-t border-slate-200">
+                        <td className="px-2 py-1 text-slate-800">
+                          {formatIdInteger(formData.jangkaWaktuKredit) || "-"}{" "}
+                          Bulan
+                        </td>
+                        <td className="px-2 py-1 text-slate-800">
+                          {formData.caraAngsuranKredit || "-"}
+                        </td>
+                        <td className="px-2 py-1 text-slate-800">
+                          {formData.sistemAngsuranKredit || "-"}
+                          {isKreditMusiman
+                            ? " (Kredit Musiman)"
+                            : ""}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                {angsuranScheduleRows.length ? (
+                  <div className="mt-3 overflow-hidden rounded-md border border-slate-200 bg-white">
+                    <table className="w-full text-[11px]">
+                      <thead className="bg-slate-50 text-slate-600">
+                        <tr>
+                          <th className="px-2 py-1 text-left font-semibold">
+                            Periode
+                          </th>
+                          <th className="px-2 py-1 text-left font-semibold">
+                            Bulan
+                          </th>
+                          <th className="px-2 py-1 text-right font-semibold">
+                            Pokok
+                          </th>
+                          <th className="px-2 py-1 text-right font-semibold">
+                            Bunga
+                          </th>
+                          <th className="px-2 py-1 text-right font-semibold">
+                            Total
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {angsuranScheduleRows.map((row) => (
+                          <tr
+                            key={`angsuran-${row.period}`}
+                            className="border-t border-slate-200"
+                          >
+                            <td className="px-2 py-1 text-slate-800">
+                              {row.period}
+                            </td>
+                            <td className="px-2 py-1 text-slate-800">
+                              {row.startMonth}-{row.endMonth}
+                            </td>
+                            <td className="px-2 py-1 text-right text-slate-800">
+                              Rp {formatIdNumber(row.principal) || "-"}
+                            </td>
+                            <td className="px-2 py-1 text-right text-slate-800">
+                              Rp {formatIdNumber(row.interest) || "-"}
+                            </td>
+                            <td className="px-2 py-1 text-right text-slate-800">
+                              Rp {formatIdNumber(row.total) || "-"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : null}
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="rounded-md bg-gray-50 px-2 py-1">
+                    <span className="text-[10px] text-gray-500">Pokok</span>
+                    <div className="font-semibold">
                         Rp {formatIdNumber(formData.pokokPerBulan) || "-"}
                       </div>
                     </div>

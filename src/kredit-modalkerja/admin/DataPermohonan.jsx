@@ -145,6 +145,16 @@ const computeSukuBungaBulan = ({ sukuBungaTahun, perhitunganBunga }) => {
   return "";
 };
 
+const resolvePerhitunganBungaFromRate = (sukuBungaTahun) => {
+  if (sukuBungaTahun === "" || sukuBungaTahun === null || sukuBungaTahun === undefined) {
+    return "";
+  }
+  const rate = toNumber(sukuBungaTahun);
+  if (!Number.isFinite(rate) || rate <= 0) return "";
+
+  return rate >= 18 ? "Anuitas" : "Flat";
+};
+
 const resolveJenisKreditLabel = (value) => {
   if (!value) return "";
   const normalized = String(value).trim();
@@ -218,11 +228,10 @@ const [loadingNoPermohonan, setLoadingNoPermohonan] = useState(false);
   ]);
 
   useEffect(() => {
-    if (formData.sukuBungaTahun === "") return;
-    const rate = toNumber(formData.sukuBungaTahun);
-    if (!Number.isFinite(rate) || rate <= 0) return;
-
-    const nextPerhitungan = rate >= 18 ? "Anuitas" : "Flat";
+    const nextPerhitungan = resolvePerhitunganBungaFromRate(
+      formData.sukuBungaTahun
+    );
+    if (!nextPerhitungan) return;
     setFormData((prev) =>
       prev.perhitunganBunga === nextPerhitungan
         ? prev
@@ -259,10 +268,29 @@ const handleFieldChange = (field) => (event) => {
   }));
 };
 
+const sanitizeDecimalInput = (value) => {
+  const normalized = String(value ?? "").replace(/,/g, ".");
+  const digitsOnly = normalized.replace(/[^0-9.]/g, "");
+  if (!digitsOnly) return "";
+  const dotIndex = digitsOnly.indexOf(".");
+  if (dotIndex === -1) return digitsOnly;
+  const whole = digitsOnly.slice(0, dotIndex);
+  const decimals = digitsOnly.slice(dotIndex + 1).replace(/\./g, "");
+  return decimals ? `${whole}.${decimals}` : `${whole}.`;
+};
+
 const handleNumberFieldChange = (field) => (event) => {
   const rawValue = event.target.value;
   const cleanedValue = rawValue.replace(/\D/g, "");
 
+  setFormData((prev) => ({
+    ...prev,
+    [field]: cleanedValue,
+  }));
+};
+
+const handleDecimalFieldChange = (field) => (event) => {
+  const cleanedValue = sanitizeDecimalInput(event.target.value);
   setFormData((prev) => ({
     ...prev,
     [field]: cleanedValue,
@@ -469,9 +497,9 @@ const handleSave = async () => {
                     <Input
                       label="Suku Bunga / Tahun"
                       type="text"
-                      value={formatIdInteger(formData.sukuBungaTahun)}
-                      onChange={handleNumberFieldChange("sukuBungaTahun")}
-                      inputMode="numeric"
+                      value={formData.sukuBungaTahun}
+                      onChange={handleDecimalFieldChange("sukuBungaTahun")}
+                      inputMode="decimal"
                     />
                   </div>
                   <span className="pb-2 text-xs text-gray-500">%</span>
@@ -509,9 +537,9 @@ const handleSave = async () => {
                 >
                   <option value="">Pilih Cara Angsuran</option>
                   <option value="Bulanan">Bulanan</option>
-                  <option value="Triwulan">3 Bulan</option>
-                  <option value="Triwulan">6 Bulan</option>
-                  <option value="Triwulan">Lebih Dari 6 Bulanan</option>
+                  <option value="3 Bulan">3 Bulan</option>
+                  <option value="6 Bulan">6 Bulan</option>
+                  <option value="Lebih Dari 6 Bulanan">Lebih Dari 6 Bulanan</option>
                 </Select>
                 <Select
                   label="Sistem Angsuran Kredit"
@@ -519,11 +547,11 @@ const handleSave = async () => {
                   onChange={handleFieldChange("sistemAngsuranKredit")}
                 >
                   <option value="">Pilih Sistem Angsuran</option>
-                  <option value="Bulanan">Pokok dan Bunga dibayar setiap Bulan</option>
-                  <option value="Bulanan">Bunga dibayar setiap bulan dan Pokok saat JT</option>
-                  <option value="Triwulan">Bunga dan Pokok dibayar sekaligus saat JT</option>
-                  <option value="Triwulan">Pokok dan Bunga per Triwulan</option>
-                  <option value="Triwulan">Pokok dan Bunga dibayar per semester ( 6 bulan sekali)</option>
+                  <option value="Pokok dan Bunga dibayar setiap Bulan">Pokok dan Bunga dibayar setiap Bulan</option>
+                  <option value="Bunga dibayar setiap bulan dan Pokok saat JT">Bunga dibayar setiap bulan dan Pokok saat JT</option>
+                  <option value="Bunga dan Pokok dibayar sekaligus saat JT">Bunga dan Pokok dibayar sekaligus saat JT</option>
+                  <option value="Pokok dan Bunga per Triwulan">Pokok dan Bunga per Triwulan</option>
+                  <option value="Pokok dan Bunga dibayar per semester ( 6 bulan sekali)">Pokok dan Bunga dibayar per semester ( 6 bulan sekali)</option>
                 </Select>
                 <div className="md:col-span-2">
                   <label className="text-xs font-semibold text-slate-500">

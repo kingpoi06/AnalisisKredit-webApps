@@ -5,6 +5,7 @@ import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import Login from "./views/loginpage/index";
 import Dashboard from "./kredit-modalkerja/admin/dashboard";
 import DashboardUsers from "./monitoring-users/dashboard-users";
+import DashboardAdministrasi from "./component/dashboardAdministrasi";
 import DataDiriNasabah from "./kredit-modalkerja/admin/DataDiri";
 import DataUsaha from "./kredit-modalkerja/admin/DataUsaha";
 import DataJaminan from "./kredit-modalkerja/admin/DataJaminan";
@@ -18,6 +19,10 @@ import PrintPDF from "./kredit-modalkerja/admin/printPDF";
 import DataInstansi from "./kredit-konsumtif/admin/DataInstansi";
 import UploadCabangKantor from "./master-data/UploadCabangKantor";
 import UploadPegawai from "./master-data/UploadPegawai";
+import KalkulatorTabungan from "./tabungan/admin/KalkulatorTabungan";
+import DashboardPusat from "./monitoring-pusat/dashboard-pusat";
+import ViewCabang from "./monitoring-pusat/viewCabang";
+import ViewPegawai from "./monitoring-pusat/viewPegawai";
 
 //UPDATE DATE
 import UpdateDataDiriNasabah from "./kredit-modalkerja/update/DataDiri";
@@ -26,6 +31,7 @@ import UpdateDataJaminan from "./kredit-modalkerja/update/DataJaminan";
 import UpdateDataUsaha from "./kredit-modalkerja/update/DataUsaha";
 import UpdateAnalisis from "./kredit-modalkerja/update/Analisis";
 import UpdateDataInstansi from "./kredit-konsumtif/update/DataInstansi";
+
 
 
 function App() {
@@ -37,13 +43,20 @@ function App() {
         
         {/* Fitur */}
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route
+          path="/dashboard-administrasi"
+          element={<DashboardAdministrasi />}
+        />
         <Route path="/dashboard-monitoring-users" element={<DashboardUsers />} />
+        <Route path="/dashboard-monitoring-pusat" element={<DashboardPusat />} />
 
         <Route path="/generate/no-permohonan" element={<Permohonan />} />
         <Route path="/kalkulator" element={<Kalkulator />} />
+        <Route path="/kalkulator-tabungan" element={<KalkulatorTabungan />} />
 
         {/* Data Diri Nasabah (MASTER DATA) */}
         <Route path="/master-data/data-diri" element={<DataDiriNasabah/>}/>
+        <Route path="/master-data/data-diri/:no_permohonan" element={<DataDiriNasabah/>}/>
 
         {/* Data Usaha Nasabah (MASTER DATA) */}
         <Route path="/master-data/data-usaha/:no_permohonan" element={<DataUsaha/>}/>
@@ -56,6 +69,10 @@ function App() {
 
         <Route path="/analisis-nasabah/:no_permohonan" element={<Analisis/>}/>
         {/* <Route path="/rekomendasi-dan-kesimpulan/:no_permohonan" element={<RekomdanKesimpulan/>}/> */}
+        <Route path="/view-cabang" element={<ViewCabang/>}/>
+        <Route path="/view-cabang/:kodeKantor" element={<ViewCabang/>}/>
+        <Route path="/view-data/:kodeKantor" element={<ViewCabang/>} />
+        <Route path="/view-pegawai/:kdpegawai" element={<ViewPegawai/>} />
 
 
         {/* UPDATE DATA*/}

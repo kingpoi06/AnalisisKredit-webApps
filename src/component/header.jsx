@@ -17,13 +17,6 @@ export default function Header() {
      🔐 AUTH & USER DATA
   =============================== */
   useEffect(() => {
-    if (location.pathname.includes("kalkulator")) {
-      setNamalengkap("Guest User");
-      // setUsername("Guest");
-      setJabatan("Kalkulator");
-      return;
-    }
-
     const token = localStorage.getItem("accessToken");
     if (!token) {
       navigate("/");
@@ -56,13 +49,15 @@ export default function Header() {
   =============================== */
   const getPageTitle = () => {
     if (location.pathname.includes("dashboard"))
-      return "Dashboard — Analisis Kredit";
+      return "Dashboard — Analisis Sistem";
     if (location.pathname.includes("data-diri"))
       return "Data Diri Nasabah";
     if (location.pathname.includes("data-usaha"))
       return "Data Usaha Nasabah";
     if (location.pathname.includes("data-jaminan"))
       return "Data Jaminan Nasabah";
+    if (location.pathname.includes("kalkulator-tabungan"))
+      return "Kalkulator Tabungan";
     if (location.pathname.includes("kalkulator"))
       return "Kalkulator Kredit";
 
@@ -85,7 +80,7 @@ export default function Header() {
       "
     >
       {/* LEFT */}
-      <div className="flex items-center gap-3 min-w-0">
+      <div className="flex items-center gap-3 min-w-0 pl-28 sm:pl-0">
         <img
           src={LogoBPR}
           alt="BPR NTB"
@@ -94,7 +89,7 @@ export default function Header() {
 
         <div className="hidden sm:block border-l h-8 border-gray-300" />
 
-        <h1 className="text-xs sm:text-sm font-semibold text-gray-700 truncate">
+        <h1 className="hidden sm:block text-xs sm:text-sm font-semibold text-gray-700 truncate">
           {getPageTitle()}
         </h1>
       </div>

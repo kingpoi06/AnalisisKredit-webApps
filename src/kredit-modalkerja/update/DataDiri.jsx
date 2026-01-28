@@ -14,6 +14,24 @@ import { jwtDecode } from "jwt-decode";
 import axios from "axios";
 import { API_ENDPOINTS } from "../../config/apiEndpoints";
 
+const OCR_SPACE_ENDPOINT = "https://api.ocr.space/parse/image";
+const OCR_SPACE_API_KEY = "K87910109088957";
+const OCR_SPACE_LANGUAGE_PRIMARY = "ind";
+const OCR_SPACE_LANGUAGE_FALLBACK = "eng";
+const OCR_SPACE_ENGINE_PRIMARY = "2";
+const OCR_SPACE_ENGINE_FALLBACK = "1";
+const OCR_FIELD_MIN_SCORE = 7;
+const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
+const MAX_OCR_SIZE = 900 * 1024;
+const OCR_MAX_DIMENSION = 1600;
+const OCR_MIN_QUALITY = 0.5;
+const OCR_QUALITY_STEP = 0.1;
+const OCR_CONTRAST = 1.45;
+const OCR_BRIGHTNESS = 1.12;
+const OCR_BINARIZE_THRESHOLD = 160;
+const OCR_CONTRAST_STRONG = 1.6;
+const OCR_BRIGHTNESS_STRONG = 1.2;
+const OCR_BINARIZE_THRESHOLD_STRONG = 150;
 
 const Input = ({ label, type = "text", options = [], readOnly = false, ...props }) => (
   <div className="relative space-y-1">
@@ -90,11 +108,985 @@ const Select = ({
   </div>
 );
 
+const canvasToBlob = (canvas, quality) =>
+  new Promise((resolve) => {
+    canvas.toBlob(resolve, "image/jpeg", quality);
+  });
+
+const loadImageFromFile = (file) =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+
+const applyOcrBinarize = (ctx, width, height, threshold) => {
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+  const safeThreshold = Number.isFinite(threshold)
+    ? threshold
+    : OCR_BINARIZE_THRESHOLD;
+  for (let i = 0; i < data.length; i += 4) {
+    const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+    const value = gray >= safeThreshold ? 255 : 0;
+    data[i] = value;
+    data[i + 1] = value;
+    data[i + 2] = value;
+  }
+  ctx.putImageData(imageData, 0, 0);
+};
+
+const prepareCompressedFile = async (file, targetSize, options = {}) => {
+  if (!file) return file;
+  const {
+    enhanceForOcr = false,
+    binarize = false,
+    contrast = OCR_CONTRAST,
+    brightness = OCR_BRIGHTNESS,
+    binarizeThreshold = OCR_BINARIZE_THRESHOLD,
+  } = options;
+  if (file.size <= targetSize && !enhanceForOcr && !binarize) return file;
+
+  const image = await loadImageFromFile(file);
+  const scale = Math.min(
+    1,
+    OCR_MAX_DIMENSION / Math.max(image.width, image.height)
+  );
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  const ctx = canvas.getContext("2d");
+  const drawImageToCanvas = () => {
+    ctx.filter = enhanceForOcr
+      ? `grayscale(1) contrast(${contrast}) brightness(${brightness})`
+      : "none";
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    if (binarize) {
+      applyOcrBinarize(ctx, canvas.width, canvas.height, binarizeThreshold);
+    }
+  };
+  drawImageToCanvas();
+
+  let quality = enhanceForOcr ? 0.9 : 0.85;
+  let blob = await canvasToBlob(canvas, quality);
+  while (blob && blob.size > targetSize && quality > OCR_MIN_QUALITY) {
+    quality = Math.max(OCR_MIN_QUALITY, quality - OCR_QUALITY_STEP);
+    drawImageToCanvas();
+    blob = await canvasToBlob(canvas, quality);
+  }
+
+  while (
+    blob &&
+    blob.size > targetSize &&
+    canvas.width > 800 &&
+    canvas.height > 800
+  ) {
+    canvas.width = Math.max(1, Math.round(canvas.width * 0.85));
+    canvas.height = Math.max(1, Math.round(canvas.height * 0.85));
+    drawImageToCanvas();
+    quality = 0.8;
+    blob = await canvasToBlob(canvas, quality);
+  }
+
+  while (
+    blob &&
+    blob.size > targetSize &&
+    (canvas.width > 420 || canvas.height > 420)
+  ) {
+    canvas.width = Math.max(420, Math.round(canvas.width * 0.8));
+    canvas.height = Math.max(420, Math.round(canvas.height * 0.8));
+    drawImageToCanvas();
+    quality = Math.max(0.4, quality - OCR_QUALITY_STEP);
+    blob = await canvasToBlob(canvas, quality);
+  }
+
+  if (!blob) return file;
+  return new File([blob], `ocr-${file.name.replace(/\.[^.]+$/, "")}.jpg`, {
+    type: "image/jpeg",
+  });
+};
+
+const prepareOcrFile = (file) =>
+  prepareCompressedFile(file, MAX_OCR_SIZE, {
+    enhanceForOcr: true,
+    contrast: OCR_CONTRAST,
+    brightness: OCR_BRIGHTNESS,
+  });
+const prepareOcrFileBinarized = (file) =>
+  prepareCompressedFile(file, MAX_OCR_SIZE, {
+    enhanceForOcr: true,
+    binarize: true,
+    contrast: OCR_CONTRAST,
+    brightness: OCR_BRIGHTNESS,
+    binarizeThreshold: OCR_BINARIZE_THRESHOLD,
+  });
+const prepareOcrFileStrongBinarized = (file) =>
+  prepareCompressedFile(file, MAX_OCR_SIZE, {
+    enhanceForOcr: true,
+    binarize: true,
+    contrast: OCR_CONTRAST_STRONG,
+    brightness: OCR_BRIGHTNESS_STRONG,
+    binarizeThreshold: OCR_BINARIZE_THRESHOLD_STRONG,
+  });
+const prepareUploadFile = (file) =>
+  prepareCompressedFile(file, MAX_UPLOAD_SIZE);
+
+const normalizeOcrText = (text) => String(text ?? "").replace(/\r/g, "").trim();
+const stripLeadingSymbols = (value) =>
+  String(value ?? "").replace(/^[\s:;.,-]+/, "").trim();
+const normalizeLine = (line) =>
+  stripLeadingSymbols(String(line ?? "").replace(/\s+/g, " ").trim());
+const getOcrLines = (text) =>
+  normalizeOcrText(text)
+    .split("\n")
+    .map(normalizeLine)
+    .filter(Boolean);
+
+const NAME_CUTOFF_KEYWORDS = [
+  "TEMPAT",
+  "TGL",
+  "TTL",
+  "LAHIR",
+  "JENIS",
+  "KELAMIN",
+  "ALAMAT",
+  "GOL",
+  "DARAH",
+];
+const NAME_INVALID_TOKENS = [
+  "TEMPAT",
+  "TGL",
+  "TTL",
+  "LAHIR",
+  "NAMA",
+  "JENIS",
+  "KELAMIN",
+  "ALAMAT",
+  "GOL",
+  "DARAH",
+  "AGAMA",
+  "STATUS",
+  "KEWARGANEGARAAN",
+  "PEKERJAAN",
+  "KEL",
+  "DESA",
+  "KECAMATAN",
+  "KAB",
+  "KOTA",
+  "PROVINSI",
+  "RT",
+  "RW",
+];
+const ADDRESS_STOP_PREFIXES = [
+  "RT/RW",
+  "RT",
+  "RW",
+  "KEL",
+  "DESA",
+  "KELURAHAN",
+  "KECAMATAN",
+  "KAB",
+  "KOTA",
+  "PROVINSI",
+  "AGAMA",
+  "STATUS",
+  "PEKERJAAN",
+  "KEWARGANEGARAAN",
+  "GOL",
+  "DARAH",
+  "NIK",
+  "NAMA",
+  "TEMPAT",
+  "TGL",
+  "TTL",
+  "JENIS",
+];
+
+const hasAnyKeyword = (value, keywords) => {
+  const upper = String(value ?? "").toUpperCase();
+  return keywords.some((keyword) => upper.includes(keyword));
+};
+
+const startsWithAnyKeyword = (value, keywords) => {
+  const normalized = String(value ?? "")
+    .replace(/\s*\/\s*/g, "/")
+    .trim()
+    .toUpperCase();
+  return keywords.some((keyword) => normalized.startsWith(keyword));
+};
+
+const normalizeLabelToken = (value) =>
+  normalizeLine(value)
+    .toUpperCase()
+    .replace(/[0O]/g, "O")
+    .replace(/[1I]/g, "I")
+    .replace(/[5S]/g, "S")
+    .replace(/[4A]/g, "A")
+    .replace(/[7T]/g, "T");
+
+const simplifyLabel = (value) =>
+  normalizeLabelToken(value).replace(/[^A-Z/]/g, "");
+
+const isNamaLabel = (value) => {
+  const simplified = simplifyLabel(value);
+  return simplified === "NAMA" || simplified.startsWith("NAMALENGKAP");
+};
+
+const isRtRwLabel = (value) => {
+  const simplified = simplifyLabel(value);
+  if (simplified.includes("RTRW") || simplified.includes("RT/RW")) return true;
+  return /R[TI1]\s*\/?\s*R[WV]/i.test(value);
+};
+
+const isKelDesaLabel = (value) => {
+  const simplified = simplifyLabel(value);
+  const relaxed = simplified.replace(/I/g, "L");
+  return (
+    simplified.startsWith("KELDESA") ||
+    simplified.startsWith("KEL/DESA") ||
+    simplified.startsWith("KELURAHAN") ||
+    simplified.startsWith("DESA") ||
+    relaxed.startsWith("KELDESA") ||
+    relaxed.startsWith("KEL/DESA") ||
+    relaxed.startsWith("KELURAHAN") ||
+    relaxed.startsWith("DESA")
+  );
+};
+
+const isJenisKelaminLabel = (value) => {
+  const simplified = simplifyLabel(value);
+  return /JENISK[ELI]{1,2}AMIN/.test(simplified);
+};
+
+const isAlamatLabel = (value) => {
+  const simplified = simplifyLabel(value);
+  return simplified.startsWith("ALAMAT") || simplified.startsWith("ALAMT");
+};
+
+const pickFirstMatch = (text, patterns) => {
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) return stripLeadingSymbols(match[1]);
+  }
+  return "";
+};
+
+const stripAfterKeywords = (value, keywords) => {
+  if (!value) return "";
+  const raw = String(value ?? "");
+  const upper = raw.toUpperCase();
+  let cutIndex = raw.length;
+  keywords.forEach((keyword) => {
+    const idx = upper.indexOf(keyword);
+    if (idx > 0 && idx < cutIndex) {
+      cutIndex = idx;
+    }
+  });
+  return stripLeadingSymbols(raw.slice(0, cutIndex).replace(/[,:-]+$/, ""));
+};
+
+const isLikelyNameValue = (value) => {
+  const normalized = normalizeLine(value);
+  if (!normalized) return false;
+  if (/[/:]/.test(normalized)) return false;
+  if (/\d/.test(normalized)) return false;
+  if (hasAnyKeyword(normalized, NAME_INVALID_TOKENS)) return false;
+  return true;
+};
+
+const cleanNamaCandidate = (value) => {
+  const cleaned = stripAfterKeywords(value, NAME_CUTOFF_KEYWORDS);
+  const normalized = normalizeLine(cleaned);
+  if (!normalized) return "";
+  if (!isLikelyNameValue(normalized)) return "";
+  return normalized;
+};
+
+const getNextValueExcluding = (lines, startIndex, invalidTokens) => {
+  for (let i = startIndex; i < lines.length; i += 1) {
+    const candidate = normalizeLine(lines[i]);
+    if (!candidate) continue;
+    if (hasAnyKeyword(candidate, invalidTokens)) continue;
+    if (/^\d+$/.test(candidate)) continue;
+    return candidate;
+  }
+  return "";
+};
+
+const extractNamaLengkap = (lines, text) => {
+  const patterns = [
+    /NAMA LENGKAP\s*[:\-]?\s*([^\n]+)/i,
+    /N\s*A\s*M\s*A\s*L\s*E\s*N\s*G\s*K\s*A\s*P\s*[:\-]?\s*([^\n]+)/i,
+    /NAMA\s*[:\-]?\s*([^\n]+)/i,
+    /N\s*A\s*M\s*A\s*[:\-]?\s*([^\n]+)/i,
+    /N[4A]M[4A]\s*[:\-]?\s*([^\n]+)/i,
+  ];
+  const direct = cleanNamaCandidate(pickFirstMatch(text, patterns));
+  if (direct) return direct;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!isNamaLabel(line)) continue;
+    const inlineMatch = line.match(
+      /N\s*A\s*M\s*A(?:\s*L\s*E\s*N\s*G\s*K\s*A\s*P)?\s*[:\-]?\s*(.*)/i
+    );
+    const inlineValue = cleanNamaCandidate(inlineMatch?.[1] || "");
+    if (inlineValue) return inlineValue;
+    for (let j = i + 1; j < lines.length && j <= i + 2; j += 1) {
+      const candidate = cleanNamaCandidate(lines[j]);
+      if (candidate) return candidate;
+      if (hasAnyKeyword(lines[j], NAME_INVALID_TOKENS)) break;
+    }
+  }
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (/N[1I]K/.test(line) && /\d{10,}/.test(line)) {
+      const candidate = cleanNamaCandidate(
+        getNextValueExcluding(lines, i + 1, NAME_INVALID_TOKENS)
+      );
+      if (candidate) return candidate;
+    }
+  }
+
+  return "";
+};
+
+const cleanAlamatCandidate = (value) => {
+  const cleaned = stripAfterKeywords(value, [
+    "RT/RW",
+    "RT",
+    "RW",
+    "KEL",
+    "DESA",
+    "KECAMATAN",
+    "KAB",
+    "KOTA",
+    "PROVINSI",
+  ]);
+  const normalized = normalizeLine(cleaned).replace(
+    /^(ALAMAT|ALAMT|ALAMAI|ALAM4T)\s*[:\-]?\s*/i,
+    ""
+  );
+  if (!normalized) return "";
+  if (startsWithAnyKeyword(normalized, ADDRESS_STOP_PREFIXES)) return "";
+  return normalized;
+};
+
+const extractAlamatLengkap = (lines, text) => {
+  const labelPatterns = [
+    /ALAMAT LENGKAP\s*[:\-]?\s*([^\n]*)/i,
+    /ALAMAT\s*[:\-]?\s*([^\n]*)/i,
+    /ALAMT\s*[:\-]?\s*([^\n]*)/i,
+    /ALAMAI\s*[:\-]?\s*([^\n]*)/i,
+    /ALAM4T\s*[:\-]?\s*([^\n]*)/i,
+    /A\s*L\s*A\s*M\s*A\s*T\s*[:\-]?\s*([^\n]*)/i,
+  ];
+  const direct = cleanAlamatCandidate(pickFirstMatch(text, labelPatterns));
+  if (direct) return direct;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const match = labelPatterns.find((pattern) => pattern.test(line));
+    if (!match && !isAlamatLabel(line)) continue;
+    const matchValue = match ? line.match(match) : null;
+    const addressParts = [];
+    const inlineValue = cleanAlamatCandidate(matchValue?.[1] || "");
+    if (inlineValue) {
+      addressParts.push(inlineValue);
+    }
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const nextLine = normalizeLine(lines[j]);
+      if (!nextLine) continue;
+      if (startsWithAnyKeyword(nextLine, ADDRESS_STOP_PREFIXES)) break;
+      addressParts.push(nextLine);
+    }
+    const combined = normalizeLine(addressParts.join(" "));
+    if (combined) return combined;
+  }
+
+  for (let i = 0; i < lines.length; i += 1) {
+    let anchorIndex = -1;
+    if (isRtRwLabel(lines[i])) {
+      anchorIndex = i;
+    } else if (
+      /^\d{1,3}\s*[\/\-]\s*\d{1,3}/.test(lines[i]) &&
+      i > 0 &&
+      isRtRwLabel(lines[i - 1])
+    ) {
+      anchorIndex = i - 1;
+    }
+    if (anchorIndex === -1) continue;
+
+    for (let j = anchorIndex - 1; j >= 0; j -= 1) {
+      const candidate = normalizeLine(lines[j]);
+      if (!candidate) continue;
+      if (
+        isAlamatLabel(candidate) ||
+        isJenisKelaminLabel(candidate) ||
+        isKelDesaLabel(candidate)
+      ) {
+        continue;
+      }
+      if (startsWithAnyKeyword(candidate, ADDRESS_STOP_PREFIXES)) break;
+      const cleanedCandidate = cleanAlamatCandidate(candidate);
+      if (cleanedCandidate) return cleanedCandidate;
+      break;
+    }
+  }
+
+  return "";
+};
+
+const extractNikFromText = (text) => {
+  const direct = text.match(/N[1I]K\s*[:\-]?\s*([0-9]{16})/i);
+  if (direct) return direct[1];
+
+  const spaced = text.match(/N[1I]K\s*[:\-]?\s*([0-9\s]{16,20})/i);
+  if (spaced) {
+    const digits = spaced[1].replace(/\D/g, "");
+    if (digits.length === 16) return digits;
+  }
+
+  const fallback = text.match(/\b\d{16}\b/);
+  return fallback ? fallback[0] : "";
+};
+
+const normalizeJenisKelamin = (value) => {
+  const cleaned = stripAfterKeywords(value, ["GOL", "DARAH"]);
+  const upper = normalizeLabelToken(cleaned);
+  if (upper.includes("PEREMPUAN") || upper.includes("WANITA")) {
+    return "Perempuan";
+  }
+  if (upper.includes("LAKI") || upper.includes("PRIA") || upper.includes("LELAKI")) {
+    return "Laki-laki";
+  }
+  return cleaned.trim();
+};
+
+const isGenderValue = (value) => {
+  const upper = normalizeLabelToken(value);
+  return /PEREMPUAN|WANITA|LAKI|PRIA|LELAKI/.test(upper);
+};
+
+const normalizeDateDigits = (value) =>
+  String(value ?? "")
+    .replace(/[Oo]/g, "0")
+    .replace(/[Il]/g, "1")
+    .replace(/S/g, "5");
+
+const normalizeYearValue = (value) => {
+  const trimmed = normalizeDateDigits(value).trim();
+  if (!trimmed) return NaN;
+  if (trimmed.length === 2) {
+    const yearValue = Number(trimmed);
+    if (!Number.isFinite(yearValue)) return NaN;
+    return yearValue >= 30 ? 1900 + yearValue : 2000 + yearValue;
+  }
+  const yearValue = Number(trimmed);
+  return Number.isFinite(yearValue) ? yearValue : NaN;
+};
+
+const formatTanggalLahir = (day, month, year) => {
+  const dayValue = Number(normalizeDateDigits(day));
+  const monthValue = Number(normalizeDateDigits(month));
+  const yearValue =
+    typeof year === "number" ? year : normalizeYearValue(year);
+  if (
+    !Number.isFinite(dayValue) ||
+    !Number.isFinite(monthValue) ||
+    !Number.isFinite(yearValue)
+  ) {
+    return "";
+  }
+  if (dayValue < 1 || dayValue > 31 || monthValue < 1 || monthValue > 12) {
+    return "";
+  }
+  if (yearValue < 1900 || yearValue > 2100) return "";
+  return `${yearValue}-${String(monthValue).padStart(2, "0")}-${String(
+    dayValue
+  ).padStart(2, "0")}`;
+};
+
+const findTanggalLahirInText = (value) => {
+  if (!value) return null;
+  const patterns = [
+    /([0-9OIlS]{2})\s*[-/.]\s*([0-9OIlS]{2})\s*[-/.]\s*([0-9OIlS]{4})/i,
+    /\b([0-9OIlS]{2})\s*([0-9OIlS]{2})\s*([0-9OIlS]{4})\b/i,
+    /([0-9OIlS]{2})\s*[-/.]\s*([0-9OIlS]{2})\s*[-/.]\s*([0-9OIlS]{2})/i,
+    /\b([0-9OIlS]{2})\s*([0-9OIlS]{2})\s*([0-9OIlS]{2})\b/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = String(value).match(pattern);
+    if (!match) continue;
+    const [, day, month, year] = match;
+    const formatted = formatTanggalLahir(day, month, year);
+    if (formatted) {
+      return { formatted, raw: match[0] };
+    }
+  }
+
+  return null;
+};
+
+const TEMPAT_TGL_LINE_PATTERNS = [
+  /TEMPAT\s*\/?\s*T(?:GL|G1|GI|OL|0L|G|CL|O1)?\s*LAH[I1]R\s*[:\-]?\s*(.*)/i,
+  /TEMPAT\s+LAH[I1]R\s*[:\-]?\s*(.*)/i,
+  /TGL\s*LAH[I1]R\s*[:\-]?\s*(.*)/i,
+  /TANGGAL\s*LAH[I1]R\s*[:\-]?\s*(.*)/i,
+  /TTL\s*[:\-]?\s*(.*)/i,
+];
+
+const extractTempatTanggalLahir = (lines, text) => {
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const matchedPattern = TEMPAT_TGL_LINE_PATTERNS.find((pattern) =>
+      pattern.test(line)
+    );
+    if (!matchedPattern) continue;
+
+    const match = line.match(matchedPattern);
+    const inlineValue = normalizeLine(match?.[1] || "");
+    const candidateValue =
+      inlineValue ||
+      normalizeLine(getNextValueExcluding(lines, i + 1, NAME_INVALID_TOKENS));
+
+    const result = splitTempatTanggalLahir(candidateValue);
+    if (result.tempatLahir || result.tanggalLahir) return result;
+  }
+
+  const fallbackRaw = pickFirstMatch(text, [
+    /TEMPAT\/TGL LAH[I1]R\s*[:\-]?\s*([^\n]+)/i,
+    /TEMPAT\/TGL\s*LAH[I1]R\s*[:\-]?\s*([^\n]+)/i,
+    /TEMPAT LAH[I1]R\s*[:\-]?\s*([^\n]+)/i,
+    /TEMPAT\s*TGL\s*LAH[I1]R\s*[:\-]?\s*([^\n]+)/i,
+    /TGL\s*LAH[I1]R\s*[:\-]?\s*([^\n]+)/i,
+    /TANGGAL\s*LAH[I1]R\s*[:\-]?\s*([^\n]+)/i,
+    /TEMPAT.*LAH[I1]R\s*[:\-]?\s*([^\n]+)/i,
+    /TTL\s*[:\-]?\s*([^\n]+)/i,
+  ]);
+
+  return splitTempatTanggalLahir(fallbackRaw);
+};
+
+const splitTempatTanggalLahir = (value) => {
+  const cleaned = stripAfterKeywords(value, ["JENIS KELAMIN", "GOL"]);
+  if (!cleaned) return { tempatLahir: "", tanggalLahir: "" };
+
+  const dateMatch = findTanggalLahirInText(cleaned);
+  if (!dateMatch) {
+    return { tempatLahir: cleaned.trim(), tanggalLahir: "" };
+  }
+
+  const tanggalLahir = dateMatch.formatted;
+  const tempatLahir = cleaned
+    .replace(dateMatch.raw, "")
+    .replace(/[,\s]+$/, "")
+    .trim();
+
+  return { tempatLahir, tanggalLahir };
+};
+
+const normalizeRtRwDigits = (value) => normalizeDateDigits(value);
+
+const parseRtRwFromString = (value) => {
+  if (!value) return null;
+  const normalized = normalizeRtRwDigits(value);
+  let match = normalized.match(/(\d{1,3})\s*[\/\-]\s*(\d{1,3})/);
+  if (match) {
+    return { rt: match[1], rw: match[2] };
+  }
+  match = normalized.match(/RT[^0-9]*([0-9]{1,3}).*RW[^0-9]*([0-9]{1,3})/i);
+  if (match) {
+    return { rt: match[1], rw: match[2] };
+  }
+  match = normalized.match(/\b(\d{2,3})\s+(\d{2,3})\b/);
+  if (match) {
+    return { rt: match[1], rw: match[2] };
+  }
+  return null;
+};
+
+const extractRtRw = (lines, text) => {
+  const directMatch = text.match(
+    /RT\s*\/\s*RW\s*[:\-]?\s*([0-9OIlS]{1,3})\s*[\/\-]\s*([0-9OIlS]{1,3})/i
+  );
+  if (directMatch) {
+    return {
+      rt: normalizeRtRwDigits(directMatch[1]),
+      rw: normalizeRtRwDigits(directMatch[2]),
+    };
+  }
+  const directAlt = text.match(
+    /RT\s*[:\-]?\s*([0-9OIlS]{1,3}).*RW\s*[:\-]?\s*([0-9OIlS]{1,3})/i
+  );
+  if (directAlt) {
+    return {
+      rt: normalizeRtRwDigits(directAlt[1]),
+      rw: normalizeRtRwDigits(directAlt[2]),
+    };
+  }
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (isRtRwLabel(line) || /RT\s*\/?\s*RW/i.test(line)) {
+      const inlineParsed = parseRtRwFromString(line);
+      if (inlineParsed) return inlineParsed;
+      const nextLine = lines[i + 1] || "";
+      const nextParsed = parseRtRwFromString(nextLine);
+      if (nextParsed) return nextParsed;
+    }
+  }
+
+  for (const line of lines) {
+    if (/\d{1,3}\s*[\/\-]\s*\d{1,3}/.test(line) && !/\d{4}/.test(line)) {
+      const parsed = parseRtRwFromString(line);
+      if (parsed) return parsed;
+    }
+  }
+
+  return { rt: "", rw: "" };
+};
+
+const cleanDesaCandidate = (value) => {
+  const cleaned = stripAfterKeywords(value, [
+    "KECAMATAN",
+    "KAB",
+    "KOTA",
+    "PROVINSI",
+  ]);
+  const normalized = normalizeLine(cleaned).replace(
+    /^(KEL\s*\/\s*DESA|KEL\/DESA|KELURAHAN|DESA)\s*[:\-]?\s*/i,
+    ""
+  );
+  if (!normalized) return "";
+  if (startsWithAnyKeyword(normalized, ADDRESS_STOP_PREFIXES)) return "";
+  return normalized;
+};
+
+const extractDesaKelurahan = (lines, text) => {
+  const patterns = [
+    /KEL\s*\/\s*DESA\s*[:\-]?\s*([^\n]+)/i,
+    /KEL\s+DESA\s*[:\-]?\s*([^\n]+)/i,
+    /KEL\/DESA\s*[:\-]?\s*([^\n]+)/i,
+    /KELURAHAN\s*[:\-]?\s*([^\n]+)/i,
+    /DESA\s*[:\-]?\s*([^\n]+)/i,
+  ];
+  const direct = cleanDesaCandidate(pickFirstMatch(text, patterns));
+  if (direct) return direct;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (isKelDesaLabel(line) || /KEL\s*\/?\s*DESA/i.test(line)) {
+      const inlineValue = cleanDesaCandidate(pickFirstMatch(line, patterns));
+      if (inlineValue) return inlineValue;
+      const nextLine = lines[i + 1] || "";
+      const nextValue = cleanDesaCandidate(nextLine);
+      if (nextValue) return nextValue;
+    }
+  }
+
+  return "";
+};
+
+const extractJenisKelamin = (lines, text) => {
+  const patterns = [
+    /JENIS KELAM[I1]N\s*[:\-]?\s*([^\n]+)/i,
+    /JENIS\s*KELAM[I1]N\s*[:\-]?\s*([^\n]+)/i,
+    /JENIS KEL\.?\s*[:\-]?\s*([^\n]+)/i,
+  ];
+  const direct = normalizeJenisKelamin(pickFirstMatch(text, patterns));
+  if (direct && isGenderValue(direct)) return direct;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!isJenisKelaminLabel(line) && !/KELAM[I1]N/i.test(line)) continue;
+    const inlineValue = normalizeJenisKelamin(pickFirstMatch(line, patterns));
+    if (inlineValue && isGenderValue(inlineValue)) return inlineValue;
+    const nextLine = lines[i + 1] || "";
+    const nextValue = normalizeJenisKelamin(nextLine);
+    if (nextValue && isGenderValue(nextValue)) return nextValue;
+  }
+
+  for (const line of lines) {
+    if (/PEREMPUAN|WANITA|LAKI|PRIA/i.test(line)) {
+      const candidate = normalizeJenisKelamin(line);
+      if (candidate) return candidate;
+    }
+  }
+
+  return "";
+};
+
+const extractKtpFieldsFromText = (text) => {
+  const normalized = normalizeOcrText(text);
+  if (!normalized) return {};
+  const lines = getOcrLines(normalized);
+
+  const nik = extractNikFromText(normalized);
+  const namaLengkap = extractNamaLengkap(lines, normalized);
+  const { tempatLahir, tanggalLahir } = extractTempatTanggalLahir(
+    lines,
+    normalized
+  );
+  let tanggalLahirValue = tanggalLahir;
+  if (!tanggalLahirValue) {
+    const tglOnlyRaw = pickFirstMatch(normalized, [
+      /TGL\s*LAH[I1]R\s*[:\-]?\s*([^\n]+)/i,
+      /TANGGAL\s*LAH[I1]R\s*[:\-]?\s*([^\n]+)/i,
+    ]);
+    const dateFallback = findTanggalLahirInText(tglOnlyRaw || normalized);
+    if (dateFallback?.formatted) {
+      tanggalLahirValue = dateFallback.formatted;
+    }
+  }
+  const jenisKelamin = extractJenisKelamin(lines, normalized);
+  const agama = stripAfterKeywords(
+    pickFirstMatch(normalized, [/AGAMA\s*[:\-]?\s*([^\n]+)/i]),
+    ["STATUS", "PEKERJAAN"]
+  );
+  const statusPerkawinan = stripAfterKeywords(
+    pickFirstMatch(normalized, [
+      /STATUS PERKAW[I1]NAN\s*[:\-]?\s*([^\n]+)/i,
+      /STATUS KAW[I1]N\s*[:\-]?\s*([^\n]+)/i,
+    ]),
+    ["PEKERJAAN", "KEWARGANEGARAAN"]
+  );
+  const jenispekerjaan = stripAfterKeywords(
+    pickFirstMatch(normalized, [/PEKERJAAN\s*[:\-]?\s*([^\n]+)/i]),
+    ["KEWARGANEGARAAN"]
+  );
+  const kewarganegaraan = pickFirstMatch(normalized, [
+    /KEWARGANEGARAAN\s*[:\-]?\s*([^\n]+)/i,
+  ]);
+  const alamatLengkap = extractAlamatLengkap(lines, normalized);
+  const { rt, rw } = extractRtRw(lines, normalized);
+  const desaKelurahan = extractDesaKelurahan(lines, normalized);
+  const kecamatan = pickFirstMatch(normalized, [
+    /KECAMATAN\s*[:\-]?\s*([^\n]+)/i,
+  ]);
+  const kabupaten = pickFirstMatch(normalized, [
+    /KABUPATEN\s*[:\-]?\s*([^\n]+)/i,
+    /KAB\/KOTA\s*[:\-]?\s*([^\n]+)/i,
+    /KOTA\s*[:\-]?\s*([^\n]+)/i,
+  ]);
+  const provinsi = pickFirstMatch(normalized, [
+    /PROVINSI\s*[:\-]?\s*([^\n]+)/i,
+  ]);
+
+  return postProcessKtpFields({
+    nik,
+    namaLengkap,
+    tempatLahir,
+    tanggalLahir: tanggalLahirValue,
+    jenisKelamin,
+    statusPerkawinan,
+    agama,
+    kewarganegaraan,
+    jenispekerjaan,
+    alamatLengkap,
+    rt,
+    rw,
+    desaKelurahan,
+    kecamatan,
+    kabupaten,
+    provinsi,
+  });
+};
+
+const LABEL_PREFIX_REGEX = /^(?:N[I1]K|NAMA|N4MA|TEMPAT\/?T?G?L?\s*LAHIR|TGL\s*LAHIR|TTL|JENIS\s+KELAMIN|KELAMIN|ALAMAT|ALAMT|ALAMAI|IAMAT|LAMAT|RT\s*\/?\s*RW|KELURAHAN|KEL\/DESA|KEL\s*\/\s*DESA|KEL\b|DESA|KECAMATAN|ECAMATAN|KABUPATEN|KAB\/KOTA|KAB\b|KOTA|PROVINSI|AGAMA|STATUS\s*PERKAW[I1]NAN|STATUS\s*KAW[I1]N|PEKERJAAN|PKERJAAN|KEWARGANEGARAAN|WARGANEGARAAN|GOL\.?\s*DARAH)\b[\s:.,/-]*/i;
+
+const stripLeadingLabelTokens = (value) => {
+  if (!value) return value;
+  let cleaned = String(value).trim().replace(/^[\s:.,/-]+/, "");
+  for (let i = 0; i < 2; i += 1) {
+    const next = cleaned.replace(LABEL_PREFIX_REGEX, "").trim().replace(/^[\s:.,/-]+/, "");
+    if (next === cleaned) break;
+    cleaned = next;
+  }
+  return cleaned;
+};
+
+const cleanFieldByLabel = (value, field) => {
+  if (!value) return "";
+  let cleaned = stripLeadingLabelTokens(value);
+  const upper = cleaned.toUpperCase();
+  switch (field) {
+    case "namaLengkap":
+      if (upper.startsWith("AMA ")) cleaned = cleaned.slice(3).trim();
+      break;
+    case "alamatLengkap":
+      cleaned = cleaned.replace(/^(?:ALAMAT|ALAMT|IAMAT|LAMAT)\b[:\s-]*/i, "");
+      break;
+    case "desaKelurahan":
+      cleaned = cleaned.replace(/^(?:KELURAHAN|KEL\/DESA|KEL\s*\/\s*DESA|KEL\b|DESA|DE5A)\b[:\s-]*/i, "");
+      break;
+    case "kecamatan":
+      cleaned = cleaned.replace(/^(?:KECAMATAN|ECAMATAN|KECAM4TAN)\b[:\s-]*/i, "");
+      break;
+    case "kabupaten":
+      cleaned = cleaned.replace(/^(?:KABUPATEN|KAB\/KOTA|KAB\b|KOTA)\b[:\s-]*/i, "");
+      break;
+    case "provinsi":
+      cleaned = cleaned.replace(/^(?:PROVINSI|PROV)\b[:\s-]*/i, "");
+      break;
+    case "agama":
+      cleaned = cleaned.replace(/^(?:AGAMA|AG4MA)\b[:\s-]*/i, "");
+      break;
+    case "statusPerkawinan":
+      cleaned = cleaned.replace(/^(?:STATUS\s*PERKAW[I1]NAN|STATUS\s*KAW[I1]N)\b[:\s-]*/i, "");
+      break;
+    case "jenispekerjaan":
+      cleaned = cleaned.replace(/^(?:PEKERJAAN|PKERJAAN|PEKERJAA?N|KERJAAN)\b[:\s-]*/i, "");
+      break;
+    case "kewarganegaraan":
+      cleaned = cleaned.replace(/^(?:KEWARGANEGARAAN|WARGANEGARAAN)\b[:\s-]*/i, "");
+      break;
+    default:
+      break;
+  }
+  return normalizeLine(cleaned);
+};
+
+const postProcessKtpFields = (fields) => {
+  const next = { ...fields };
+  next.namaLengkap = cleanFieldByLabel(next.namaLengkap, "namaLengkap");
+  next.tempatLahir = cleanFieldByLabel(next.tempatLahir, "tempatLahir");
+  next.alamatLengkap = cleanFieldByLabel(next.alamatLengkap, "alamatLengkap");
+  next.desaKelurahan = cleanFieldByLabel(next.desaKelurahan, "desaKelurahan");
+  next.kecamatan = cleanFieldByLabel(next.kecamatan, "kecamatan");
+  next.kabupaten = cleanFieldByLabel(next.kabupaten, "kabupaten");
+  next.provinsi = cleanFieldByLabel(next.provinsi, "provinsi");
+  next.agama = cleanFieldByLabel(next.agama, "agama");
+  next.statusPerkawinan = cleanFieldByLabel(next.statusPerkawinan, "statusPerkawinan");
+  next.jenispekerjaan = cleanFieldByLabel(next.jenispekerjaan, "jenispekerjaan");
+  const kewarganegaraan = cleanFieldByLabel(next.kewarganegaraan, "kewarganegaraan");
+  const upper = kewarganegaraan.toUpperCase();
+  if (/\bWNI\b/.test(upper)) next.kewarganegaraan = "WNI";
+  else if (/\bWNA\b/.test(upper)) next.kewarganegaraan = "WNA";
+  else next.kewarganegaraan = "";
+  return next;
+};
+
+const readOcrSpaceText = (data) => {
+  const errorMessage = data?.ErrorMessage;
+  if (data?.IsErroredOnProcessing) {
+    const message = Array.isArray(errorMessage)
+      ? errorMessage.join(", ")
+      : errorMessage;
+    throw new Error(message || "OCR gagal diproses.");
+  }
+
+  const parsedText = (data?.ParsedResults || [])
+    .map((item) => item?.ParsedText || "")
+    .join("\n")
+    .trim();
+
+  if (!parsedText) {
+    throw new Error("Hasil OCR kosong.");
+  }
+
+  return parsedText;
+};
+
+const requestOcrSpace = async (file, options = {}) => {
+  const {
+    language = OCR_SPACE_LANGUAGE_PRIMARY,
+    engine = OCR_SPACE_ENGINE_PRIMARY,
+  } = options;
+  const formDataUpload = new FormData();
+  formDataUpload.append("apikey", OCR_SPACE_API_KEY);
+  formDataUpload.append("language", language);
+  formDataUpload.append("isOverlayRequired", "false");
+  formDataUpload.append("OCREngine", engine);
+  formDataUpload.append("scale", "true");
+  formDataUpload.append("detectOrientation", "true");
+  formDataUpload.append("file", file);
+
+  const response = await fetch(OCR_SPACE_ENDPOINT, {
+    method: "POST",
+    body: formDataUpload,
+  });
+
+  if (!response.ok) {
+    throw new Error("Gagal menghubungi layanan OCR.");
+  }
+
+  return response.json();
+};
+
+const countFilledFields = (fields) =>
+  Object.values(fields || {}).filter((value) =>
+    String(value ?? "").trim()
+  ).length;
+
+const isStrongOcrResult = (fields) => {
+  const score = countFilledFields(fields);
+  if (score >= OCR_FIELD_MIN_SCORE) return true;
+  return Boolean(fields?.nik && fields?.namaLengkap && fields?.tanggalLahir);
+};
+
+const runOcrSpaceWithFallback = async (file) => {
+  const attempts = [
+    { language: OCR_SPACE_LANGUAGE_PRIMARY, engine: OCR_SPACE_ENGINE_PRIMARY },
+    { language: OCR_SPACE_LANGUAGE_PRIMARY, engine: OCR_SPACE_ENGINE_FALLBACK },
+    { language: OCR_SPACE_LANGUAGE_FALLBACK, engine: OCR_SPACE_ENGINE_PRIMARY },
+  ];
+  let bestFields = {};
+  let bestScore = 0;
+  let lastError = null;
+
+  const tryAttempts = async (variantFile) => {
+    if (!variantFile) return null;
+    for (const attempt of attempts) {
+      try {
+        const ocrResponse = await requestOcrSpace(variantFile, attempt);
+        const ocrText = readOcrSpaceText(ocrResponse);
+        const parsedFields = extractKtpFieldsFromText(ocrText);
+        const score = countFilledFields(parsedFields);
+        if (score > bestScore) {
+          bestScore = score;
+          bestFields = parsedFields;
+        }
+        if (isStrongOcrResult(parsedFields)) {
+          return parsedFields;
+        }
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    return null;
+  };
+
+  const enhancedFile = await prepareOcrFile(file);
+  const primaryResult = await tryAttempts(enhancedFile);
+  if (primaryResult) return primaryResult;
+
+  const binarizedFile = await prepareOcrFileBinarized(file);
+  const binarizedResult = await tryAttempts(binarizedFile);
+  if (binarizedResult) return binarizedResult;
+
+  const strongBinarizedFile = await prepareOcrFileStrongBinarized(file);
+  const strongResult = await tryAttempts(strongBinarizedFile);
+  if (strongResult) return strongResult;
+
+  if (bestScore > 0) return bestFields;
+  throw lastError || new Error("Hasil OCR kosong.");
+};
+
 export default function UpdateDataDiriNasabah() {
   const navigate = useNavigate();
-  const ktpRef = useRef(null);
-  const ktpRefPasangan = useRef(null);
-  const selfieRef = useRef(null);
+  const ktpCameraRef = useRef(null);
+  const ktpGalleryRef = useRef(null);
+  const ktpPasanganCameraRef = useRef(null);
+  const ktpPasanganGalleryRef = useRef(null);
+  const selfieCameraRef = useRef(null);
+  const selfieGalleryRef = useRef(null);
   const { no_permohonan } = useParams();
 
   const [fotoKtp, setFotoKtp] = useState(null);
@@ -153,8 +1145,15 @@ const formatIdInteger = (value) => {
 
 const formatDateInput = (value) => {
   if (!value) return "";
-  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return trimmed;
+    }
+    const dmyMatch = trimmed.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/);
+    if (dmyMatch) {
+      return `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
+    }
   }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "";
@@ -163,6 +1162,14 @@ const formatDateInput = (value) => {
   const day = String(parsed.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 };
+
+const normalizeOcrValue = (value) => {
+  if (value === null || value === undefined) return "";
+  return String(value).replace(/\s+/g, " ").trim();
+};
+
+const normalizeOcrDigits = (value) =>
+  normalizeOcrValue(value).replace(/\D/g, "");
 
 const normalizeList = (data) => {
   if (!Array.isArray(data)) return data ? [data] : [];
@@ -302,8 +1309,60 @@ const normalizeDataDiri = (data) => ({
   }, [navigate, no_permohonan]);
   
 
+  const processImageFile = async (file, setter, label, inputEl) => {
+    if (!file) {
+      setter(null);
+      return;
+    }
+    if (file.size > MAX_UPLOAD_SIZE) {
+      Swal.fire("Error", "Ukuran file maksimum 20MB", "error");
+      if (inputEl) {
+        inputEl.value = "";
+      }
+      setter(null);
+      return;
+    }
+    const compressed = await prepareUploadFile(file);
+    setter(compressed);
+    Swal.fire({
+      toast: true,
+      position: "top-end",
+      icon: "success",
+      title: `${label || "Foto"} berhasil disimpan`,
+      showConfirmButton: false,
+      timer: 1200,
+      timerProgressBar: true,
+    });
+  };
+
   const handleCamera = (ref) => {
-    ref.current.click();
+    if (ref?.current) {
+      ref.current.click();
+    }
+  };
+
+  const handlePickImageSource = async (cameraRef, galleryRef) => {
+    const result = await Swal.fire({
+      title: "Pilih sumber foto",
+      text: "Gunakan kamera atau pilih dari galeri",
+      icon: "question",
+      showCancelButton: true,
+      showDenyButton: true,
+      confirmButtonText: "Kamera",
+      denyButtonText: "Galeri",
+      cancelButtonText: "Batal",
+    });
+
+    if (result.isConfirmed) {
+      handleCamera(cameraRef);
+    } else if (result.isDenied) {
+      handleCamera(galleryRef);
+    }
+  };
+
+  const handleImageFileChange = (setter, label) => async (event) => {
+    const file = event.target.files?.[0];
+    await processImageFile(file, setter, label, event.target);
   };
 
 const openMaps = () => {
@@ -336,9 +1395,6 @@ const handleValidasiKtp = async () => {
   }
 
   try {
-    const formDataUpload = new FormData();
-    formDataUpload.append("fotoKTP", fotoKtp);
-
     Swal.fire({
       title: "Validasi KTP",
       text: "Sedang memproses data...",
@@ -346,38 +1402,32 @@ const handleValidasiKtp = async () => {
       didOpen: () => Swal.showLoading(),
     });
 
-    const res = await axios.post(
-      API_ENDPOINTS.datanasabah.ocrKtp(),
-      formDataUpload
-    );
-
-    const ocr = res.data.Data;
+    const ocr = await runOcrSpaceWithFallback(fotoKtp);
 
     setFormData((prev) => ({
       ...prev,
-      nik: ocr.nikKTP || "",
-      namaLengkap: ocr.namaLengkap || "",
-      tempatLahir: ocr.tempatLahir || "",
-      tanggalLahir: ocr.tanggalLahir || "",
-      jenisKelamin: ocr.jenisKelamin || "",
-      agama: ocr.agama || "",
-      kewarganegaraan: ocr.kewarganegaraan || "",
-      alamatLengkap: ocr.alamatLengkap || "",
-      rt: ocr.rt || "",
-      rw: ocr.rw || "",
-      desaKelurahan: ocr.desaKelurahan || "",
-      kecamatan: ocr.kecamatan || "",
-      kabupaten: ocr.kabupaten || "",
-      provinsi: ocr.provinsi || "",
-      jenispekerjaan: ocr.jenispekerjaan || "",
-      statusPerkawinan: ocr.statusPerkawinan || "",
+      nik: normalizeOcrDigits(ocr.nik),
+      namaLengkap: normalizeOcrValue(ocr.namaLengkap),
+      tempatLahir: normalizeOcrValue(ocr.tempatLahir),
+      tanggalLahir: formatDateInput(ocr.tanggalLahir),
+      jenisKelamin: normalizeOcrValue(ocr.jenisKelamin),
+      agama: normalizeOcrValue(ocr.agama),
+      kewarganegaraan: normalizeOcrValue(ocr.kewarganegaraan),
+      alamatLengkap: normalizeOcrValue(ocr.alamatLengkap),
+      rt: normalizeOcrValue(ocr.rt),
+      rw: normalizeOcrValue(ocr.rw),
+      desaKelurahan: normalizeOcrValue(ocr.desaKelurahan),
+      kecamatan: normalizeOcrValue(ocr.kecamatan),
+      kabupaten: normalizeOcrValue(ocr.kabupaten),
+      provinsi: normalizeOcrValue(ocr.provinsi),
+      jenispekerjaan: normalizeOcrValue(ocr.jenispekerjaan),
+      statusPerkawinan: normalizeOcrValue(ocr.statusPerkawinan),
     }));
-
     Swal.fire("Berhasil", "Data KTP berhasil divalidasi", "success");
   } catch (error) {
     Swal.fire(
       "Gagal",
-      error.response?.data?.msg || "Validasi KTP gagal",
+      error?.message || "Validasi KTP gagal",
       "error"
     );
   }
@@ -390,9 +1440,6 @@ const handleValidasiKtpPasangan = async () => {
   }
 
   try {
-    const formDataUpload = new FormData();
-    formDataUpload.append("fotoKTP", fotoKtpPasangan);
-
     Swal.fire({
       title: "Validasi KTP",
       text: "Sedang memproses data...",
@@ -400,27 +1447,21 @@ const handleValidasiKtpPasangan = async () => {
       didOpen: () => Swal.showLoading(),
     });
 
-    const res = await axios.post(
-      API_ENDPOINTS.datanasabah.ocrKtp(),
-      formDataUpload
-    );
-
-    const ocr = res.data.Data;
+    const ocr = await runOcrSpaceWithFallback(fotoKtpPasangan);
 
     setFormData((prev) => ({
       ...prev,
-      nikPenanggungJawab: ocr.nikKTP || "",
-      namaPenanggungJawab: ocr.namaLengkap || "",
-      pekerjaanPenanggungJawab: ocr.jenispekerjaan || "",
-      tempatLahirPenanggungJawab: ocr.tempatLahir || "",
-      tanggalLahirPenanggungJawab: ocr.tanggalLahir || "",
+      nikPenanggungJawab: normalizeOcrDigits(ocr.nik),
+      namaPenanggungJawab: normalizeOcrValue(ocr.namaLengkap),
+      pekerjaanPenanggungJawab: normalizeOcrValue(ocr.jenispekerjaan),
+      tempatLahirPenanggungJawab: normalizeOcrValue(ocr.tempatLahir),
+      tanggalLahirPenanggungJawab: formatDateInput(ocr.tanggalLahir),
     }));
-
     Swal.fire("Berhasil", "Data KTP berhasil divalidasi", "success");
   } catch (error) {
     Swal.fire(
       "Gagal",
-      error.response?.data?.msg || "Validasi KTP gagal",
+      error?.message || "Validasi KTP gagal",
       "error"
     );
   }
@@ -512,7 +1553,6 @@ const handleSave = async () => {
     }
   };
 
-
   return (
     <PageBackground>
 
@@ -555,7 +1595,9 @@ const handleSave = async () => {
 
                 {/* CARD UPLOAD KTP */}
                 <div
-                  onClick={() => handleCamera(ktpRef)}
+                  onClick={() =>
+                    handlePickImageSource(ktpCameraRef, ktpGalleryRef)
+                  }
                   className="flex flex-col items-center justify-center
                   h-40 rounded-2xl border-2 border-dashed border-slate-200
                   bg-white/80 cursor-pointer shadow-sm
@@ -563,12 +1605,19 @@ const handleSave = async () => {
                   transition text-center"
                 >
                   <input
-                    ref={ktpRef}
+                    ref={ktpCameraRef}
                     type="file"
                     accept="image/*"
                     capture="environment"
                     className="hidden"
-                    onChange={(e) => setFotoKtp(e.target.files[0])}
+                    onChange={handleImageFileChange(setFotoKtp, "Foto KTP")}
+                  />
+                  <input
+                    ref={ktpGalleryRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleImageFileChange(setFotoKtp, "Foto KTP")}
                   />
 
                   <div className="text-blue-600 text-3xl mb-2">📄</div>
@@ -602,7 +1651,9 @@ const handleSave = async () => {
 
               {/* FOTO SELFIE + KTP */}
               <div
-                onClick={() => handleCamera(selfieRef)}
+                onClick={() =>
+                  handlePickImageSource(selfieCameraRef, selfieGalleryRef)
+                }
                 className="flex flex-col items-center justify-center
                 h-40 rounded-2xl border-2 border-dashed border-slate-200
                 bg-white/80 cursor-pointer shadow-sm
@@ -610,12 +1661,19 @@ const handleSave = async () => {
                 transition text-center"
               >
                 <input
-                  ref={selfieRef}
+                  ref={selfieCameraRef}
                   type="file"
                   accept="image/*"
                   capture="user"
                   className="hidden"
-                  onChange={(e) => setSelfieKtp(e.target.files[0])}
+                  onChange={handleImageFileChange(setSelfieKtp, "Selfie + KTP")}
+                />
+                <input
+                  ref={selfieGalleryRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleImageFileChange(setSelfieKtp, "Selfie + KTP")}
                 />
 
                 <div className="text-blue-600 text-3xl mb-2">🤳</div>
@@ -795,7 +1853,12 @@ const handleSave = async () => {
 
             <div className="space-y-6">
               <div
-                onClick={() => handleCamera(ktpRefPasangan)}
+                  onClick={() =>
+                    handlePickImageSource(
+                      ktpPasanganCameraRef,
+                      ktpPasanganGalleryRef
+                    )
+                  }
                 className="flex flex-col items-center justify-center
                 h-40 rounded-xl border-2 border-dashed border-slate-200
                 bg-slate-50/80 cursor-pointer shadow-sm
@@ -803,12 +1866,25 @@ const handleSave = async () => {
                 transition text-center"
               >
                 <input
-                  ref={ktpRefPasangan}
+                  ref={ktpPasanganCameraRef}
                   type="file"
                   accept="image/*"
                   capture="environment"
                   className="hidden"
-                  onChange={(e) => setFotoKtpPasangan(e.target.files[0])}
+                  onChange={handleImageFileChange(
+                    setFotoKtpPasangan,
+                    "Foto KTP Penanggung Jawab"
+                  )}
+                />
+                <input
+                  ref={ktpPasanganGalleryRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleImageFileChange(
+                    setFotoKtpPasangan,
+                    "Foto KTP Penanggung Jawab"
+                  )}
                 />
 
                 <div className="text-indigo-600 text-3xl mb-1">📄</div>
@@ -923,6 +1999,7 @@ const handleSave = async () => {
           </div>
         </main>
       </div>
+
     </PageBackground>
   );
 }

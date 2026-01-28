@@ -1,15 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
-import Sidebar from "../../component/sidebar";
-import Header from "../../component/header";
-import PageBackground from "../../component/PageBackground";
+import Sidebar from "./sidebar";
+import Header from "./header";
+import PageBackground from "./PageBackground";
 import { useNavigate } from "react-router-dom";
 import { jwtDecode } from "jwt-decode";
 import Swal from "sweetalert2";
 import axios from "axios";
 import { FaUsers, FaFileInvoiceDollar, FaBriefcase, FaTrash } from "react-icons/fa";
-import { API_ENDPOINTS } from "../../config/apiEndpoints";
+import { API_ENDPOINTS } from "../config/apiEndpoints";
 
-export default function Dashboard() {
+export default function DashboardAdministrasi() {
   const navigate = useNavigate();
 
   const [loading, setLoading] = useState(true);
@@ -21,9 +21,8 @@ export default function Dashboard() {
 
   const [listKredit, setListKredit] = useState([]);
   const [filterStatus, setFilterStatus] = useState("ALL");
+  const [filterMonth, setFilterMonth] = useState("ALL");
   const [searchQuery, setSearchQuery] = useState("");
-  const [monthFilter, setMonthFilter] = useState("ALL");
-  const [currentPage, setCurrentPage] = useState(1);
 
   // Untuk modal
   const [showModal, setShowModal] = useState(false);
@@ -36,7 +35,20 @@ export default function Dashboard() {
   const [jenisPerhitungan, setJenisPerhitungan] = useState("");
   const [caraPengembalianKredit, setCaraPengembalianKredit] = useState("");
   const [userRole, setUserRole] = useState("");
-  const pendingAlertRef = useRef({ komitecabang: "", penyelia: "" });
+  const [userKantor, setUserKantor] = useState("");
+  const pendingAlertRef = useRef("");
+  const NIK_PENANGGUNG_KEYS = [
+    "nikPenanggungJawab",
+    "nik_penanggung_jawab",
+    "nikPenanggung",
+    "nik_penanggung",
+    "nikPasangan",
+    "nik_pasangan",
+    "nikSuamiIstri",
+    "nik_suami_istri",
+    "nikPenjamin",
+    "nik_penjamin",
+  ];
 
   const normalizeStatus = (status) => {
     if (!status) return "Pending";
@@ -47,16 +59,6 @@ export default function Dashboard() {
       return "Pending";
     }
     return status;
-  };
-
-  const normalizeRole = (value) =>
-    String(value ?? "")
-      .toLowerCase()
-      .replace(/[_\s]+/g, "");
-
-  const isPendingStatus = (status) => {
-    const normalized = normalizeStatus(status);
-    return normalized !== "Approve" && normalized !== "Reject";
   };
 
   const normalizeJenisPerhitungan = (value) => {
@@ -140,12 +142,319 @@ export default function Dashboard() {
     }).format(numericValue);
   };
 
+  const SLIK_UPLOAD_INDEX = 0;
+
+  const getSlikStorageKey = (permohonan) =>
+    permohonan ? `slik:${permohonan}` : "";
+
+  const readSlikStorage = (permohonan) => {
+    const storageKey = getSlikStorageKey(permohonan);
+    if (!storageKey) return {};
+    try {
+      const raw = localStorage.getItem(storageKey);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const writeSlikStorage = (permohonan, next) => {
+    const storageKey = getSlikStorageKey(permohonan);
+    if (!storageKey) return;
+    if (!next || Object.keys(next).length === 0) {
+      localStorage.removeItem(storageKey);
+      return;
+    }
+    localStorage.setItem(storageKey, JSON.stringify(next));
+  };
+
+  const clearSlikStorage = (permohonan) => {
+    writeSlikStorage(permohonan, {});
+  };
+
+  const getLocalSlikEntry = (permohonan) => {
+    const current = readSlikStorage(permohonan);
+    return current?.[SLIK_UPLOAD_INDEX] ?? null;
+  };
+
+  const hasLocalSlikEntry = (entry) =>
+    Boolean(entry?.fileName || entry?.table?.rows?.length);
+
+  const getLocalSlikInfo = (permohonan) => {
+    const current = readSlikStorage(permohonan);
+    const values = Object.values(current || {});
+    for (const entry of values) {
+      const hasRows = Boolean(entry?.table?.rows?.length);
+      const fileName = entry?.fileName ?? "";
+      if (fileName || hasRows) {
+        return { hasSlik: true, fileName };
+      }
+    }
+    return { hasSlik: false, fileName: "" };
+  };
+
+  const hasTextValue = (value) =>
+    typeof value === "string" && value.trim() !== "";
+
+  const looksLikeTxtFileName = (value) =>
+    hasTextValue(value) && value.trim().toLowerCase().endsWith(".txt");
+
+  const getFirstStringValue = (source, keys) => {
+    for (const key of keys) {
+      const value = source?.[key];
+      if (hasTextValue(value)) {
+        return value.trim();
+      }
+    }
+    return "";
+  };
+
+  const getSlikInfoFromDataDiri = (item) => {
+    const nasabahFile = getFirstStringValue(item, [
+      "slik",
+      "slikFile",
+      "slikFileName",
+      "slik_file",
+      "slik_filename",
+    ]);
+    const nasabahText = getFirstStringValue(item, [
+      "slikText",
+      "slik_text",
+      "slikTxt",
+      "sliktext",
+    ]);
+    const penanggungFile = getFirstStringValue(item, [
+      "slikPenanggungJawab",
+      "slik_penanggung_jawab",
+      "slikPasangan",
+      "slik_pasangan",
+    ]);
+    const penanggungText = getFirstStringValue(item, [
+      "slikTextPenanggungJawab",
+      "slik_text_penanggung_jawab",
+      "slikTxtPenanggungJawab",
+      "slik_txt_penanggung_jawab",
+    ]);
+
+    const nasabahFileName = looksLikeTxtFileName(nasabahFile)
+      ? nasabahFile
+      : "";
+    const penanggungFileName = looksLikeTxtFileName(penanggungFile)
+      ? penanggungFile
+      : "";
+    const hasNasabahServerSlik = Boolean(
+      nasabahFileName || hasTextValue(nasabahText)
+    );
+    const hasPenanggungServerSlik = Boolean(
+      penanggungFileName || hasTextValue(penanggungText)
+    );
+
+    return {
+      nasabahFileName,
+      penanggungFileName,
+      hasNasabahServerSlik,
+      hasPenanggungServerSlik,
+    };
+  };
+
+  const parseSlikText = (text) => {
+    const rawText = String(text ?? "");
+    const trimmedText = rawText.trim();
+    if (!trimmedText) {
+      return { headers: [], rows: [] };
+    }
+
+    const normalizeKey = (value) =>
+      String(value ?? "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+
+    const expectedKeys = [
+      "namadebitur",
+      "ljkket",
+      "jeniskreditpembiayaan",
+      "jeniskreditpembiayaanket",
+      "plafon",
+      "bakidebet",
+      "sukubungaimbalan",
+      "tanggalakadawal",
+      "tanggaljatuhtempo",
+      "jumlahharitunggakan",
+      "kualitas",
+      "kualitasket",
+      "kondisi",
+    ];
+
+    const findFirstValueByKey = (value, targetKeys) => {
+      if (!value) return "";
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          const found = findFirstValueByKey(item, targetKeys);
+          if (found !== "") return found;
+        }
+        return "";
+      }
+      if (typeof value !== "object") return "";
+      for (const [key, child] of Object.entries(value)) {
+        const normalized = normalizeKey(key);
+        if (targetKeys.includes(normalized)) {
+          const raw = child ?? "";
+          if (String(raw).trim() !== "") return String(raw).trim();
+        }
+        const found = findFirstValueByKey(child, targetKeys);
+        if (found !== "") return found;
+      }
+      return "";
+    };
+
+    const collectNormalizedKeys = (value, keySet) => {
+      if (!value) return;
+      if (Array.isArray(value)) {
+        value.forEach((item) => collectNormalizedKeys(item, keySet));
+        return;
+      }
+      if (typeof value !== "object") return;
+      Object.entries(value).forEach(([key, child]) => {
+        keySet.add(normalizeKey(key));
+        if (child && typeof child === "object") {
+          collectNormalizedKeys(child, keySet);
+        }
+      });
+    };
+
+    const collectObjectArrays = (value, arrays) => {
+      if (!value) return;
+      if (Array.isArray(value)) {
+        const objectItems = value.filter(
+          (item) => item && typeof item === "object" && !Array.isArray(item)
+        );
+        if (objectItems.length) {
+          arrays.push(objectItems);
+        }
+        value.forEach((item) => collectObjectArrays(item, arrays));
+        return;
+      }
+      if (typeof value !== "object") return;
+      Object.values(value).forEach((child) =>
+        collectObjectArrays(child, arrays)
+      );
+    };
+
+    const extractRowsFromJson = (jsonData) => {
+      const arrays = [];
+      collectObjectArrays(jsonData, arrays);
+
+      let bestRows = [];
+      let bestScore = 0;
+      let bestLength = 0;
+
+      arrays.forEach((rows) => {
+        const keySet = new Set();
+        rows.forEach((row) => collectNormalizedKeys(row, keySet));
+        const score = expectedKeys.filter((key) => keySet.has(key)).length;
+        if (
+          score > bestScore ||
+          (score === bestScore && rows.length > bestLength)
+        ) {
+          bestRows = rows;
+          bestScore = score;
+          bestLength = rows.length;
+        }
+      });
+
+      if (bestScore > 0) return bestRows;
+
+      if (jsonData && typeof jsonData === "object" && !Array.isArray(jsonData)) {
+        const keySet = new Set();
+        collectNormalizedKeys(jsonData, keySet);
+        const score = expectedKeys.filter((key) => keySet.has(key)).length;
+        if (score > 0) return [jsonData];
+      }
+
+      return [];
+    };
+
+    if (trimmedText.startsWith("{") || trimmedText.startsWith("[")) {
+      try {
+        const jsonData = JSON.parse(trimmedText);
+        const jsonRows = extractRowsFromJson(jsonData);
+        if (jsonRows.length) {
+          const namaDebitur = findFirstValueByKey(jsonData, ["namadebitur"]);
+          return {
+            headers: [],
+            rows: jsonRows,
+            meta: namaDebitur ? { namaDebitur } : {},
+          };
+        }
+      } catch {
+        // Fall through to delimited parsing.
+      }
+    }
+
+    const lines = String(text)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    if (!lines.length) {
+      return { headers: [], rows: [] };
+    }
+
+    const delimiters = [",", ";", "\t", "|"];
+    const firstLine = lines[0];
+    let delimiter = "";
+    let maxCount = 0;
+
+    delimiters.forEach((delim) => {
+      const count = firstLine.split(delim).length - 1;
+      if (count > maxCount) {
+        maxCount = count;
+        delimiter = delim;
+      }
+    });
+
+    if (!delimiter) {
+      return {
+        headers: ["Data SLIK"],
+        rows: lines.map((line) => [line]),
+      };
+    }
+
+    const rows = lines.map((line) =>
+      line.split(delimiter).map((cell) => cell.trim())
+    );
+    const firstRow = rows[0];
+    const looksLikeHeader = firstRow.some((cell) => /[A-Za-z]/.test(cell));
+
+    if (looksLikeHeader && rows.length > 1) {
+      return { headers: firstRow, rows: rows.slice(1) };
+    }
+
+    return {
+      headers: firstRow.map((_, index) => `Kolom ${index + 1}`),
+      rows,
+    };
+  };
+
   const handleNumericChange = (setter) => (event) => {
     setter(sanitizeNumericValue(event.target.value));
   };
 
   const handleCurrencyChange = (setter) => (event) => {
     setter(formatCurrencyInput(event.target.value));
+  };
+
+  const getSlikTargetConfig = (target) => {
+    const normalized = target === "penanggung" ? "penanggung" : "nasabah";
+    return {
+      target: normalized,
+      label: normalized === "penanggung" ? "Penanggung Jawab" : "Nasabah",
+      fileField: normalized === "penanggung" ? "slikPenanggungJawab" : "slik",
+      clearField:
+        normalized === "penanggung"
+          ? "clearSlikPenanggungJawab"
+          : "clearSlik",
+    };
   };
 
   const handleDeletePermohonan = async (kredit) => {
@@ -185,6 +494,146 @@ export default function Dashboard() {
     }
   };
 
+  const handleDeleteSlik = async (kredit, target = "nasabah") => {
+    const noPermohonan = kredit?.no_permohonan;
+    if (!noPermohonan) {
+      Swal.fire("Gagal", "No permohonan tidak ditemukan.", "error");
+      return;
+    }
+    const config = getSlikTargetConfig(target);
+    const hasLocalSlik =
+      config.target === "nasabah" &&
+      hasLocalSlikEntry(getLocalSlikEntry(noPermohonan));
+    const hasServerSlik =
+      config.target === "penanggung"
+        ? Boolean(kredit?.hasServerSlikPenanggung)
+        : Boolean(kredit?.hasServerSlikNasabah);
+    if (!hasLocalSlik && !hasServerSlik) {
+      Swal.fire("Info", "Data SLIK tidak ditemukan untuk dihapus.", "info");
+      return;
+    }
+
+    const confirmDelete = await Swal.fire({
+      title: "Hapus SLIK?",
+      text: `Hasil upload SLIK ${config.label} (${noPermohonan}) akan dihapus.`,
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Hapus",
+      cancelButtonText: "Batal",
+      confirmButtonColor: "#dc2626",
+      cancelButtonColor: "#9ca3af",
+    });
+    if (!confirmDelete.isConfirmed) return;
+
+    try {
+      Swal.fire({
+        title: "Menghapus...",
+        allowOutsideClick: false,
+        didOpen: () => Swal.showLoading(),
+      });
+      if (hasServerSlik) {
+        const payload = new FormData();
+        payload.append(config.clearField, "1");
+        await axios.patch(
+          API_ENDPOINTS.datanasabah.dataDiri.detail(noPermohonan),
+          payload
+        );
+      }
+      if (config.target === "nasabah") {
+        clearSlikStorage(noPermohonan);
+      }
+      Swal.fire("Berhasil", "Data SLIK berhasil dihapus.", "success");
+      fetchDashboard();
+    } catch (err) {
+      Swal.fire(
+        "Gagal",
+        err.response?.data?.msg || "Gagal menghapus data SLIK.",
+        "error"
+      );
+    }
+  };
+
+  const handleUploadSlik = async (kredit, target = "nasabah") => {
+    const noPermohonan = kredit?.no_permohonan;
+    if (!noPermohonan) {
+      Swal.fire("Gagal", "No permohonan tidak ditemukan.", "error");
+      return;
+    }
+
+    const config = getSlikTargetConfig(target);
+    const hasSlikTarget =
+      config.target === "penanggung"
+        ? Boolean(kredit?.hasSlikPenanggung)
+        : Boolean(kredit?.hasSlikNasabah);
+    const isInitialUpload = !hasSlikTarget;
+    const uploadPrompt = isInitialUpload
+      ? `Data ${noPermohonan} sedang menunggu upload file SLIK ${config.label}.`
+      : `Upload ulang file SLIK ${config.label} untuk ${noPermohonan}.`;
+
+    const result = await Swal.fire({
+      title: `Upload SLIK ${config.label} (TXT)`,
+      text: uploadPrompt,
+      input: "file",
+      inputAttributes: {
+        accept: ".txt,text/plain",
+      },
+      showCancelButton: true,
+      confirmButtonText: isInitialUpload ? "Upload" : "Upload Ulang",
+      cancelButtonText: "Batal",
+      preConfirm: () => {
+        const file = Swal.getInput()?.files?.[0];
+        if (!file) {
+          Swal.showValidationMessage("File TXT wajib dipilih.");
+          return false;
+        }
+        if (!file.name.toLowerCase().endsWith(".txt")) {
+          Swal.showValidationMessage("File harus berformat .txt.");
+          return false;
+        }
+        return file;
+      },
+    });
+
+    if (!result.isConfirmed || !result.value) return;
+
+    const file = result.value;
+    try {
+      Swal.fire({
+        title: "Memproses...",
+        allowOutsideClick: false,
+        didOpen: () => Swal.showLoading(),
+      });
+      const text = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result ?? ""));
+        reader.onerror = () => reject(new Error("Gagal membaca file SLIK."));
+        reader.readAsText(file);
+      });
+      const table = parseSlikText(text);
+      if (!table.rows?.length) {
+        Swal.fire("Gagal", "File SLIK kosong atau tidak terbaca.", "error");
+        return;
+      }
+      const payload = new FormData();
+      payload.append(config.fileField, file);
+      await axios.patch(
+        API_ENDPOINTS.datanasabah.dataDiri.detail(noPermohonan),
+        payload
+      );
+      if (config.target === "nasabah") {
+        clearSlikStorage(noPermohonan);
+      }
+      Swal.fire("Berhasil", "File SLIK berhasil diupload.", "success");
+      fetchDashboard();
+    } catch (err) {
+      Swal.fire(
+        "Gagal",
+        err.response?.data?.msg || err?.message || "Gagal mengupload file SLIK.",
+        "error"
+      );
+    }
+  };
+
   const getFieldValue = (source, keys, fallback = "") => {
     for (const key of keys) {
       const value = source?.[key];
@@ -197,21 +646,21 @@ export default function Dashboard() {
   const hasInputValue = (value) =>
     value !== undefined && value !== null && String(value).trim() !== "";
 
+  const normalizeKantorValue = (value) => String(value ?? "").trim();
+  const extractKantorFromNoPermohonan = (value) => {
+    const parts = String(value ?? "").split("/");
+    return parts.length > 1 ? parts[1] : "";
+  };
+  const getPermohonanKantor = (item) =>
+    getFieldValue(item, ["kdkantor", "kd_kantor", "kodeKantor", "kode_kantor"]) ||
+    getFieldValue(item?.User, ["kdkantor", "kd_kantor", "kodeKantor", "kode_kantor"]) ||
+    extractKantorFromNoPermohonan(item?.no_permohonan);
+
   const JENIS_KREDIT_MAP = {
     "121": "Kredit Modal Kerja",
     "122": "Kredit Investasi",
     "123": "Kredit Konsumtif / Pegawai",
   };
-  const STATUS_PERMOHONAN_KEYS = [
-    "statusPermohonan",
-    "status_permohonan",
-    "statuspermohonan",
-    "statusPermohonanLabel",
-    "status_permohonan_label",
-    "statusPermohonanNama",
-    "status_permohonan_nama",
-    "nama_status_permohonan",
-  ];
 
   const resolveJenisKreditLabel = (value) => {
     if (!value) return "";
@@ -233,6 +682,83 @@ export default function Dashboard() {
     return /\b123\b/.test(normalized);
   };
 
+  const isAdmin = userRole === "admin";
+  const isKomiteCabang = userRole === "komitecabang";
+  const isOfficer = userRole === "officer";
+  const keputusanTitle =
+    userRole === "penyelia"
+      ? "Kesimpulan Dan rekomendasi Oleh Penyelia Cabang"
+      : "Kesimpulan Dan rekomendasi Oleh Pimpinan Cabang";
+  const isPenyelia = userRole === "penyelia";
+
+  const getMonthKey = (dateValue) => {
+    if (!dateValue) return "";
+    const parsed = new Date(dateValue);
+    if (Number.isNaN(parsed.getTime())) return "";
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, "0");
+    return `${year}-${month}`;
+  };
+
+  const formatMonthLabel = (monthKey) => {
+    const [year, month] = String(monthKey).split("-");
+    if (!year || !month) return monthKey;
+    const parsed = new Date(Number(year), Number(month) - 1, 1);
+    if (Number.isNaN(parsed.getTime())) return monthKey;
+    return parsed.toLocaleDateString("id-ID", {
+      month: "long",
+      year: "numeric",
+    });
+  };
+
+  const adminSlikSuccess = listKredit.filter((item) => item.hasSlik).length;
+  const adminSlikPending = listKredit.filter((item) => !item.hasSlik).length;
+  const adminTotalSlik = adminSlikSuccess + adminSlikPending;
+
+  const monthOptions = isAdmin
+    ? Array.from(
+        new Set(
+          listKredit
+            .map((item) => getMonthKey(item.createdAt))
+            .filter(Boolean)
+        )
+      )
+        .sort()
+        .reverse()
+    : [];
+
+  useEffect(() => {
+    if (userRole !== "admin") return;
+    if (!listKredit.length) return;
+    const pendingItems = listKredit.filter((item) => !item.hasSlik);
+    if (!pendingItems.length) {
+      pendingAlertRef.current = "";
+      return;
+    }
+    const pendingIds = pendingItems
+      .map((item) => item.no_permohonan)
+      .filter(Boolean);
+    if (!pendingIds.length) return;
+    const key = pendingIds.join("|");
+    if (pendingAlertRef.current === key) return;
+    pendingAlertRef.current = key;
+    const preview = pendingIds.slice(0, 5);
+    const remaining = pendingIds.length - preview.length;
+    const message = `Menunggu upload SLIK untuk: ${preview.join(", ")}${
+      remaining > 0 ? `, +${remaining} lainnya` : ""
+    }.`;
+    Swal.fire({
+      toast: true,
+      position: "top-end",
+      icon: "info",
+      title: "Menunggu Upload SLIK",
+      text: message,
+      showConfirmButton: false,
+      timer: 20000,
+      timerProgressBar: true,
+    });
+  }, [listKredit, userRole]);
+
   useEffect(() => {
     const token = localStorage.getItem("accessToken");
     if (!token) {
@@ -248,7 +774,18 @@ export default function Dashboard() {
         decoded?.jabatan ||
         decoded?.level ||
         "";
-      setUserRole(normalizeRole(roleValue));
+      const normalizedRole = String(roleValue).toLowerCase();
+      const kantorValue =
+        decoded?.kdkantor ||
+        decoded?.kdKantor ||
+        decoded?.kodeKantor ||
+        decoded?.user?.kdkantor ||
+        decoded?.user?.kdKantor ||
+        decoded?.user?.kodeKantor ||
+        "";
+      const normalizedKantor = normalizeKantorValue(kantorValue);
+      setUserRole(normalizedRole);
+      setUserKantor(normalizedKantor);
       if (decoded.exp < Date.now() / 1000) {
         localStorage.removeItem("accessToken");
         navigate("/");
@@ -257,7 +794,7 @@ export default function Dashboard() {
 
       axios.defaults.headers.common["Authorization"] = `Bearer ${token}`;
 
-      fetchDashboard();
+      fetchDashboard(normalizedRole, normalizedKantor);
     } catch (err) {
       localStorage.removeItem("accessToken");
       navigate("/");
@@ -266,92 +803,49 @@ export default function Dashboard() {
 
   const formatDate = (date) => {
     if (!date) return "-";
-    const parsed = new Date(date);
-    if (Number.isNaN(parsed.getTime())) return "-";
-    return parsed.toLocaleDateString("id-ID", {
+    return new Date(date).toLocaleDateString("id-ID", {
       day: "2-digit",
       month: "short",
       year: "numeric",
     });
   };
 
-  const parseDateValue = (value) => {
-    if (!value) return null;
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) return null;
-    return parsed;
-  };
-
-  const getKreditDateValue = (item) => {
-    const direct = getFieldValue(item, [
-      "createdAt",
-      "created_at",
-      "tglInput",
-      "tanggalPermohonan",
-      "tanggal_permohonan",
-      "tglPermohonan",
-      "tgl_permohonan",
-    ]);
-    if (direct) return direct;
-    return getFieldValue(item?.permohonanData, [
-      "createdAt",
-      "created_at",
-      "tglInput",
-      "tanggalPermohonan",
-      "tanggal_permohonan",
-      "tglPermohonan",
-      "tgl_permohonan",
-    ]);
-  };
-
-  const getMonthKey = (date) =>
-    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-
-  const formatMonthLabel = (key) => {
-    if (!key || typeof key !== "string") return "";
-    const [yearRaw, monthRaw] = key.split("-");
-    const year = Number(yearRaw);
-    const month = Number(monthRaw);
-    if (!year || !month) return key;
-    const date = new Date(year, month - 1, 1);
-    if (Number.isNaN(date.getTime())) return key;
-    return date.toLocaleDateString("id-ID", { month: "long", year: "numeric" });
-  };
-
-  const fetchDashboard = async () => {
+  const fetchDashboard = async (roleValue = userRole, kantorValue = userKantor) => {
     try {
-      const requestTimeout = 15000;
-      const settle = (promise) =>
-        promise
-          .then((value) => ({ status: "fulfilled", value }))
-          .catch((reason) => ({ status: "rejected", reason }));
+      const normalizedRole = String(roleValue ?? "").toLowerCase();
+      const normalizedKantor = normalizeKantorValue(kantorValue);
+      const isAdminRole = normalizedRole === "admin";
+      const emptyResponse = { data: { Data: [] } };
       const [
-        summaryResult,
-        listResult,
-        dataDiriResult,
-        dataPermohonanResult,
-        dataUsahaResult,
-        dataInstansiResult,
-        dataJaminanResult,
-        dataAnalisisResult,
-      ] = await Promise.all([
-        settle(axios.get(API_ENDPOINTS.datanasabah.dashboard(), { timeout: requestTimeout })),
-        settle(axios.get(API_ENDPOINTS.generate.noPermohonan(), { timeout: requestTimeout })),
-        settle(axios.get(API_ENDPOINTS.datanasabah.dataDiri.list(), { timeout: requestTimeout })),
-        settle(axios.get(API_ENDPOINTS.datanasabah.dataPermohonan.list(), { timeout: requestTimeout })),
-        settle(axios.get(API_ENDPOINTS.datanasabah.dataUsaha.list(), { timeout: requestTimeout })),
-        settle(axios.get(API_ENDPOINTS.datanasabah.dataInstansi.list(), { timeout: requestTimeout })),
-        settle(axios.get(API_ENDPOINTS.datanasabah.dataJaminan.list(), { timeout: requestTimeout })),
-        settle(axios.get(API_ENDPOINTS.datanasabah.dataAnalisis.list(), { timeout: requestTimeout })),
+        summaryRes,
+        listRes,
+        dataDiriRes,
+        dataPermohonanRes,
+        dataUsahaRes,
+        dataInstansiRes,
+        dataJaminanRes,
+        dataAnalisisRes,
+      ] =
+        await Promise.all([
+        axios.get(API_ENDPOINTS.datanasabah.dashboard()),
+        axios.get(API_ENDPOINTS.generate.noPermohonan()),
+        axios.get(API_ENDPOINTS.datanasabah.dataDiri.list()),
+        isAdminRole
+          ? Promise.resolve(emptyResponse)
+          : axios.get(API_ENDPOINTS.datanasabah.dataPermohonan.list()),
+        isAdminRole
+          ? Promise.resolve(emptyResponse)
+          : axios.get(API_ENDPOINTS.datanasabah.dataUsaha.list()),
+        isAdminRole
+          ? Promise.resolve(emptyResponse)
+          : axios.get(API_ENDPOINTS.datanasabah.dataInstansi.list()),
+        axios.get(API_ENDPOINTS.datanasabah.dataJaminan.list()),
+        isAdminRole
+          ? Promise.resolve(emptyResponse)
+          : axios.get(API_ENDPOINTS.datanasabah.dataAnalisis.list()),
       ]);
 
-      const getData = (result, fallback) =>
-        result.status === "fulfilled" ? result.value.data : fallback;
-
-      const summaryData = getData(summaryResult, {
-        Data: { kreditAktif: 0, kreditPengajuan: 0 },
-      });
-      const summary = summaryData?.Data || { kreditAktif: 0, kreditPengajuan: 0 };
+      const summary = summaryRes.data.Data;
 
       setStats({
         totalAktivitas: summary.kreditAktif + summary.kreditPengajuan,
@@ -364,25 +858,79 @@ export default function Dashboard() {
         return Array.isArray(data[0]) ? data.flat() : data;
       };
 
-      const listData = getData(listResult, { Data: [] })?.Data || [];
-      const dataDiriList = normalizeList(getData(dataDiriResult, { Data: [] })?.Data);
-      const dataPermohonanList = normalizeList(
-        getData(dataPermohonanResult, { Data: [] })?.Data
-      );
-      const dataUsahaList = normalizeList(getData(dataUsahaResult, { Data: [] })?.Data);
-      const dataInstansiList = normalizeList(
-        getData(dataInstansiResult, { Data: [] })?.Data
-      );
-      const dataJaminanList = normalizeList(
-        getData(dataJaminanResult, { Data: [] })?.Data
-      );
-      const dataAnalisisList = normalizeList(
-        getData(dataAnalisisResult, { Data: [] })?.Data
-      );
+      const rawListData = listRes.data.Data || [];
+      const listData =
+        isAdminRole && normalizedKantor
+          ? rawListData.filter(
+              (item) =>
+                normalizeKantorValue(getPermohonanKantor(item)) ===
+                normalizedKantor
+            )
+          : rawListData;
+      const dataDiriList = normalizeList(dataDiriRes.data?.Data);
+      const dataPermohonanList = normalizeList(dataPermohonanRes.data?.Data);
+      const dataUsahaList = normalizeList(dataUsahaRes.data?.Data);
+      const dataInstansiList = normalizeList(dataInstansiRes.data?.Data);
+      const dataJaminanList = normalizeList(dataJaminanRes.data?.Data);
+      const dataAnalisisList = normalizeList(dataAnalisisRes.data?.Data);
+      const slikMap = new Map();
+      dataDiriList.forEach((item) => {
+        const noPermohonanKey = item.no_permohonan ?? item.noPermohonan;
+        if (!noPermohonanKey) return;
+        const slikInfo = getSlikInfoFromDataDiri(item);
+        const hasNasabahServerSlik = Boolean(slikInfo.hasNasabahServerSlik);
+        const hasPenanggungServerSlik = Boolean(
+          slikInfo.hasPenanggungServerSlik
+        );
+        if (!hasNasabahServerSlik && !hasPenanggungServerSlik) return;
+        slikMap.set(noPermohonanKey, {
+          nasabahFileName: slikInfo.nasabahFileName,
+          penanggungFileName: slikInfo.penanggungFileName,
+          hasNasabahSlik: hasNasabahServerSlik,
+          hasPenanggungSlik: hasPenanggungServerSlik,
+          hasServerSlikNasabah: hasNasabahServerSlik,
+          hasServerSlikPenanggung: hasPenanggungServerSlik,
+          hasLocalSlikNasabah: false,
+        });
+      });
+      if (isAdminRole) {
+        listData.forEach((item) => {
+          const noPermohonanKey = item.no_permohonan ?? item.noPermohonan;
+          if (!noPermohonanKey) return;
+          const localInfo = getLocalSlikInfo(noPermohonanKey);
+          if (!localInfo.hasSlik) return;
+          const existing = slikMap.get(noPermohonanKey);
+          if (existing) {
+            slikMap.set(noPermohonanKey, {
+              ...existing,
+              nasabahFileName:
+                existing.nasabahFileName || localInfo.fileName || "",
+              hasNasabahSlik: true,
+              hasLocalSlikNasabah: true,
+            });
+          } else {
+            slikMap.set(noPermohonanKey, {
+              nasabahFileName: localInfo.fileName || "",
+              penanggungFileName: "",
+              hasNasabahSlik: true,
+              hasPenanggungSlik: false,
+              hasServerSlikNasabah: false,
+              hasServerSlikPenanggung: false,
+              hasLocalSlikNasabah: true,
+            });
+          }
+        });
+      }
       const nikByPermohonan = new Map(
         dataDiriList.map((item) => [
           item.no_permohonan ?? item.noPermohonan,
           item.nik ?? item.NIK,
+        ])
+      );
+      const nikPenanggungByPermohonan = new Map(
+        dataDiriList.map((item) => [
+          item.no_permohonan ?? item.noPermohonan,
+          getFieldValue(item, NIK_PENANGGUNG_KEYS),
         ])
       );
       const permohonanSet = new Set(
@@ -427,6 +975,18 @@ export default function Dashboard() {
       const normalizedList = listData.map((item) => {
         const noPermohonanKey = item.no_permohonan ?? item.noPermohonan;
         const permohonanData = permohonanMap.get(noPermohonanKey) || {};
+        const slikInfo = slikMap.get(noPermohonanKey) || {
+          nasabahFileName: "",
+          penanggungFileName: "",
+          hasNasabahSlik: false,
+          hasPenanggungSlik: false,
+          hasServerSlikNasabah: false,
+          hasServerSlikPenanggung: false,
+          hasLocalSlikNasabah: false,
+        };
+        const hasSlikNasabah = Boolean(slikInfo.hasNasabahSlik);
+        const hasSlikPenanggung = Boolean(slikInfo.hasPenanggungSlik);
+        const hasSlikComplete = hasSlikNasabah && hasSlikPenanggung;
         const rawJenisKredit =
           getFieldValue(permohonanData, [
             "jenisKredit",
@@ -461,6 +1021,7 @@ export default function Dashboard() {
         return {
           ...item,
           nik: nikByPermohonan.get(noPermohonanKey) || item.nik,
+          nikPenanggung: nikPenanggungByPermohonan.get(noPermohonanKey) || "",
           hasDataDiri,
           hasDataPermohonan,
           hasDataUsaha,
@@ -472,6 +1033,14 @@ export default function Dashboard() {
           jenisKreditLabel,
           caraPengembalianKredit: caraPengembalianMap.get(noPermohonanKey) || "",
           statusPengajuan: normalizeStatus(item.statusPengajuan),
+          slikFileNameNasabah: slikInfo.nasabahFileName,
+          slikFileNamePenanggung: slikInfo.penanggungFileName,
+          hasSlik: hasSlikComplete,
+          hasSlikNasabah,
+          hasSlikPenanggung,
+          hasServerSlikNasabah: Boolean(slikInfo.hasServerSlikNasabah),
+          hasServerSlikPenanggung: Boolean(slikInfo.hasServerSlikPenanggung),
+          hasLocalSlikNasabah: Boolean(slikInfo.hasLocalSlikNasabah),
         };
       });
       setListKredit(normalizedList);
@@ -487,128 +1056,30 @@ export default function Dashboard() {
     if (!normalizedQuery) return true;
     const noPermohonan = String(item.no_permohonan ?? "").toLowerCase();
     const nik = String(item.nik ?? item.NIK ?? "").toLowerCase();
+    const nikPenanggung = String(item.nikPenanggung ?? "").toLowerCase();
     return (
       noPermohonan.includes(normalizedQuery) ||
-      nik.includes(normalizedQuery)
+      nik.includes(normalizedQuery) ||
+      nikPenanggung.includes(normalizedQuery)
     );
   });
 
-  const monthOptions = Array.from(
-    listKredit.reduce((acc, item) => {
-      const dateValue = getKreditDateValue(item);
-      const parsed = parseDateValue(dateValue);
-      if (!parsed) return acc;
-      acc.add(getMonthKey(parsed));
-      return acc;
-    }, new Set())
-  ).sort((a, b) => b.localeCompare(a));
-
-  const monthFilteredKredit =
-    monthFilter === "ALL"
-      ? searchedKredit
-      : searchedKredit.filter((item) => {
-          const dateValue = getKreditDateValue(item);
-          const parsed = parseDateValue(dateValue);
-          if (!parsed) return false;
-          return getMonthKey(parsed) === monthFilter;
-        });
-
-  const filteredKredit =
-    filterStatus === "ALL"
-      ? monthFilteredKredit
-      : monthFilteredKredit.filter(
-          (item) => item.statusPengajuan === filterStatus
-        );
-
-  const pageSize = 10;
-  const totalItems = filteredKredit.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-  const safePage = Math.min(Math.max(currentPage, 1), totalPages);
-  const startIndex = (safePage - 1) * pageSize;
-  const endIndex = Math.min(startIndex + pageSize, totalItems);
-  const tableKredit = filteredKredit.slice(startIndex, endIndex);
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [filterStatus, searchQuery, monthFilter]);
-
-  useEffect(() => {
-    if (currentPage > totalPages) {
-      setCurrentPage(totalPages);
-    }
-  }, [currentPage, totalPages]);
-
-  useEffect(() => {
-    if (!["komitecabang", "penyelia"].includes(userRole)) return;
-    if (!listKredit.length) return;
-
-    const getStatusPermohonanValue = (item) =>
-      getFieldValue(item, STATUS_PERMOHONAN_KEYS) ||
-      getFieldValue(item?.permohonanData, STATUS_PERMOHONAN_KEYS);
-
-    const roleKey = userRole;
-    const pendingItems =
-      userRole === "komitecabang"
-        ? listKredit.filter((item) => {
-            if (!isPendingStatus(item.statusPengajuan)) return false;
-            const statusPermohonanValue = getStatusPermohonanValue(item);
-            return Boolean(String(statusPermohonanValue ?? "").trim());
-          })
-        : listKredit.filter((item) => {
-            if (!isPendingStatus(item.statusPengajuan)) return false;
-            const statusPermohonanValue = getStatusPermohonanValue(item);
-            return !String(statusPermohonanValue ?? "").trim();
-          });
-
-    if (!pendingItems.length) {
-      pendingAlertRef.current[roleKey] = "";
-      return;
+  const filteredKredit = searchedKredit.filter((item) => {
+    if (isAdmin) {
+      if (filterStatus === "PENDING" && item.hasSlik) return false;
+      if (filterStatus === "SUCCESS" && !item.hasSlik) return false;
+      if (filterMonth !== "ALL") {
+        const monthKey = getMonthKey(item.createdAt);
+        if (monthKey !== filterMonth) return false;
+      }
+      return true;
     }
 
-    const pendingIds = pendingItems
-      .map((item) => item.no_permohonan)
-      .filter(Boolean);
-    if (!pendingIds.length) return;
-    const key = pendingIds.join("|");
-    if (pendingAlertRef.current[roleKey] === key) return;
-    pendingAlertRef.current[roleKey] = key;
+    if (filterStatus === "ALL") return true;
+    return item.statusPengajuan === filterStatus;
+  });
 
-    const preview = pendingIds.slice(0, 5);
-    const remaining = pendingIds.length - preview.length;
-    const escapeHtml = (value) =>
-      String(value)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/\"/g, "&quot;")
-        .replace(/'/g, "&#39;");
-    const lines = preview.map((id, index) => {
-      const suffix = index === preview.length - 1 && remaining === 0 ? "" : ",";
-      return `${escapeHtml(id)}${suffix}`;
-    });
-    const extraLine = remaining > 0 ? `+${remaining} lainnya` : "";
-    const html = [
-      userRole === "komitecabang"
-        ? "<div>Keputusan penyelia sudah lengkap, siap ditinjau:</div>"
-        : "<div>Permohonan menunggu keputusan penyelia:</div>",
-      `<div style="margin-top:6px;">${lines.join("<br>")}${
-        extraLine ? `<br>${extraLine}` : ""
-      }</div>`,
-    ].join("");
-    Swal.fire({
-      toast: true,
-      position: "top-end",
-      icon: "info",
-      title:
-        userRole === "komitecabang"
-          ? "Notifikasi Penyelia"
-          : "Notifikasi Permohonan",
-      html,
-      showConfirmButton: false,
-      timer: 20000,
-      timerProgressBar: true,
-    });
-  }, [listKredit, userRole]);
+  const tableKredit = filteredKredit.slice(0, 10);
 
   const openModal = (kredit) => {
     const permohonanData = kredit?.permohonanData || {};
@@ -617,9 +1088,11 @@ export default function Dashboard() {
       "keterangan_pengajuan",
       "keterangan",
     ]);
-    const statusPermohonanValue =
-      getFieldValue(kredit, STATUS_PERMOHONAN_KEYS) ||
-      getFieldValue(permohonanData, STATUS_PERMOHONAN_KEYS);
+    const statusPermohonanValue = getFieldValue(
+      kredit,
+      ["statusPermohonan", "status_permohonan", "statuspermohonan"],
+      permohonanData.statusPermohonan || ""
+    );
     const penyeliaPlafonValue = getFieldValue(
       kredit,
       ["plafonPermohonanPenyelia", "plafon_permohonan_penyelia", "plafonPenyelia"],
@@ -703,14 +1176,12 @@ export default function Dashboard() {
   const [saving, setSaving] = useState(false);
 
 const handleSave = async () => {
-  const isKomiteCabangRole = userRole === "komitecabang";
-  const isPenyeliaRole = userRole === "penyelia";
   if (!selectedKredit?.no_permohonan) {
     Swal.fire("Gagal", "No permohonan tidak ditemukan.", "error");
     return;
   }
 
-  if (!isKomiteCabangRole && !keterangan.trim()) {
+  if (!keterangan.trim()) {
     Swal.fire("Perhatian", "Keterangan wajib diisi.", "warning");
     return;
   }
@@ -734,14 +1205,18 @@ const handleSave = async () => {
       allowOutsideClick: false,
       didOpen: () => Swal.showLoading(),
     });
-    const payload = {};
-    if (!isKomiteCabangRole) {
-      payload.keteranganPengajuan = keterangan;
-    }
+    const payload = {
+      keteranganPengajuan: keterangan,
+    };
 
-    if (isKomiteCabangRole) {
+    if (isKomiteCabang) {
       payload.statusPengajuan = toApiStatus(statusPengajuan);
-    } else if (isPenyeliaRole) {
+      payload.statusPermohonan = statusPermohonan;
+      payload.plafonPermohonan = plafonPermohonan;
+      payload.sukuBunga = sukuBunga;
+      payload.jenisPerhitungan = jenisPerhitungan;
+      payload.caraPengembalianKredit = caraPengembalianKredit;
+    } else if (isPenyelia) {
       payload.statusPermohonan = statusPermohonan;
       payload.plafonPermohonanPenyelia = sanitizeNumericValue(plafonPermohonan);
       payload.sukuBungaPenyelia = sanitizeNumericValue(sukuBunga);
@@ -770,32 +1245,14 @@ const handleSave = async () => {
 
   if (loading) {
     return (
-      <PageBackground>
-        <div className="min-h-screen flex items-center justify-center px-6">
-          <div className="flex flex-col items-center gap-3 text-center">
-            <img
-              src="/bpr.png"
-              alt="Logo BPR"
-              className="h-16 w-16 object-contain"
-            />
-            <p className="text-sm font-semibold text-gray-600">
-              Mohon ditunggu...
-            </p>
-          </div>
-        </div>
-      </PageBackground>
+      <div className="h-screen flex items-center justify-center">
+        Loading...
+      </div>
     );
   }
 
-  const isKomiteCabang = userRole === "komitecabang";
-  const isOfficer = userRole === "officer";
-  const isPenyelia = userRole === "penyelia";
-  const keputusanTitle =
-    userRole === "penyelia"
-      ? "Kesimpulan Dan rekomendasi Oleh Penyelia Cabang"
-      : "Kesimpulan Dan rekomendasi Oleh Pimpinan Cabang";
-  const showKeputusan = !isOfficer;
-  const showEditData = !isKomiteCabang && !isPenyelia;
+  const showKeputusan = !isOfficer && !isAdmin;
+  const showEditData = !isKomiteCabang && !isAdmin;
   const showJenisKredit = isOfficer;
   const showDeletePermohonan = isOfficer;
   const canEditKeputusanAll = isKomiteCabang;
@@ -807,6 +1264,7 @@ const handleSave = async () => {
     (showEditData ? 1 : 0) +
     (showJenisKredit ? 1 : 0) +
     (showDeletePermohonan ? 1 : 0);
+  const adminColumnCount = 6;
 
   return (
     <PageBackground>
@@ -825,27 +1283,76 @@ const handleSave = async () => {
             </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 mb-8">
-            <StatCard title="Total Aktivitas" value={stats.totalAktivitas} icon={<FaUsers />} color="indigo" />
-            <StatCard title="Kredit Aktif" value={stats.kreditAktif} icon={<FaFileInvoiceDollar />} color="green" />
-            <StatCard title="Kredit Pengajuan" value={stats.kreditPengajuan} icon={<FaFileInvoiceDollar />} color="yellow" />
+            <StatCard
+              title="Total Aktivitas"
+              value={isAdmin ? adminTotalSlik : stats.totalAktivitas}
+              icon={<FaUsers />}
+              color="indigo"
+            />
+            <StatCard
+              title={isAdmin ? "SLIK yang Telah Di Upload" : "Kredit Aktif"}
+              value={isAdmin ? adminSlikSuccess : stats.kreditAktif}
+              icon={<FaFileInvoiceDollar />}
+              color="green"
+            />
+            <StatCard
+              title={isAdmin ? "SLIK yang belum di upload" : "Kredit Pengajuan"}
+              value={isAdmin ? adminSlikPending : stats.kreditPengajuan}
+              icon={<FaFileInvoiceDollar />}
+              color="yellow"
+            />
           </div>
 
           {/* FILTER */}
           <div className="mb-6 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                    Filter Status
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <FilterButton label="Semua" active={filterStatus === "ALL"} onClick={() => setFilterStatus("ALL")} />
-                    <FilterButton label="Kredit Aktif" active={filterStatus === "Approve"} onClick={() => setFilterStatus("Approve")} />
-                    <FilterButton label="Proses Pengajuan" active={filterStatus === "Pending"} onClick={() => setFilterStatus("Pending")} />
-                    <FilterButton label="Ditolak" active={filterStatus === "Reject"} onClick={() => setFilterStatus("Reject")} />
-                  </div>
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  Filter Status
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <FilterButton
+                    label="Semua"
+                    active={filterStatus === "ALL"}
+                    onClick={() => setFilterStatus("ALL")}
+                  />
+                  {isAdmin ? (
+                    <>
+                      <FilterButton
+                        label="Pending"
+                        active={filterStatus === "PENDING"}
+                        onClick={() => setFilterStatus("PENDING")}
+                      />
+                      <FilterButton
+                        label="Success"
+                        active={filterStatus === "SUCCESS"}
+                        onClick={() => setFilterStatus("SUCCESS")}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <FilterButton
+                        label="Kredit Aktif"
+                        active={filterStatus === "Approve"}
+                        onClick={() => setFilterStatus("Approve")}
+                      />
+                      <FilterButton
+                        label="Proses Pengajuan"
+                        active={filterStatus === "Pending"}
+                        onClick={() => setFilterStatus("Pending")}
+                      />
+                      <FilterButton
+                        label="Ditolak"
+                        active={filterStatus === "Reject"}
+                        onClick={() => setFilterStatus("Reject")}
+                      />
+                    </>
+                  )}
                 </div>
-                <div className="w-full lg:w-auto flex flex-col gap-3 sm:flex-row sm:items-end">
-                  <div className="w-full sm:w-64">
+              </div>
+              <div className="w-full lg:w-auto">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
+                  <div className="w-full sm:w-72">
                     <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                       Pencarian
                     </label>
@@ -857,31 +1364,192 @@ const handleSave = async () => {
                       onChange={(e) => setSearchQuery(e.target.value)}
                     />
                   </div>
-                  <div className="w-full sm:w-56">
-                    <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                      Filter Bulan
-                    </label>
-                    <select
-                      value={monthFilter}
-                      onChange={(e) => setMonthFilter(e.target.value)}
-                      className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
-                    >
-                      <option value="ALL">Semua Bulan</option>
-                      {monthOptions.map((key) => (
-                        <option key={key} value={key}>
-                          {formatMonthLabel(key)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  {isAdmin ? (
+                    <div className="w-full sm:w-52">
+                      <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                        Bulan
+                      </label>
+                      <select
+                        value={filterMonth}
+                        onChange={(e) => setFilterMonth(e.target.value)}
+                        className="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
+                      >
+                        <option value="ALL">Semua Bulan</option>
+                        {monthOptions.map((monthKey) => (
+                          <option key={monthKey} value={monthKey}>
+                            {formatMonthLabel(monthKey)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
+          </div>
 
           {/* TABLE */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="min-w-full text-sm divide-y divide-gray-200">
+              {isAdmin ? (
+                <table className="min-w-full text-sm divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 sm:px-6 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                        Kode Antrian Permohonan
+                      </th>
+                      <th className="px-4 sm:px-6 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider w-48">
+                        Jenis Kredit
+                      </th>
+                      <th className="px-4 sm:px-6 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                        NIK
+                      </th>
+                      <th className="px-4 sm:px-6 py-3 text-center text-[11px] font-semibold text-gray-500 uppercase tracking-wider w-40">
+                        Tanggal Masuk
+                      </th>
+                      <th className="px-4 sm:px-6 py-3 text-center text-[11px] font-semibold text-gray-500 uppercase tracking-wider w-48">
+                        Upload SLIK
+                      </th>
+                      <th className="px-4 sm:px-6 py-3 text-center text-[11px] font-semibold text-gray-500 uppercase tracking-wider w-40">
+                        Status Upload
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {tableKredit.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={adminColumnCount}
+                          className="px-6 py-8 text-center text-gray-400"
+                        >
+                          Tidak ada data
+                        </td>
+                      </tr>
+                    ) : (
+                      tableKredit.map((item) => (
+                        <tr
+                          key={item.no_permohonan}
+                          className="border-b even:bg-gray-50/60 hover:bg-indigo-50/40 transition-colors duration-200"
+                        >
+                          <td className="px-4 sm:px-6 py-3 font-semibold text-gray-800">
+                            {item.no_permohonan}
+                          </td>
+                          <td className="px-4 sm:px-6 py-3 text-sm text-gray-600">
+                            {item.jenisKreditLabel || "-"}
+                          </td>
+                          <td className="px-4 sm:px-6 py-3 text-sm text-gray-600">
+                            <div className="flex flex-col gap-1">
+                              <span>Nasabah: {item.nik || "-"}</span>
+                              <span className="text-[11px] text-gray-400">
+                                Penanggung Jawab: {item.nikPenanggung || "-"}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-4 sm:px-6 py-3 text-sm text-gray-600 text-center">
+                            {formatDate(item.createdAt)}
+                          </td>
+                          <td className="px-4 sm:px-6 py-3">
+                            <div className="grid gap-2 text-left">
+                              <div className="grid grid-cols-[84px_1fr] items-center gap-2">
+                                <span className="text-[10px] font-semibold uppercase text-slate-500">
+                                  Nasabah
+                                </span>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUploadSlik(item, "nasabah")}
+                                    className="inline-flex h-8 min-w-[130px] items-center justify-center gap-1 rounded-lg border border-indigo-200
+                                    bg-indigo-100 px-3 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-200 transition"
+                                  >
+                                    {item.hasSlikNasabah ? "Ulang Nasabah" : "Upload Nasabah"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteSlik(item, "nasabah")}
+                                    disabled={!item.hasSlikNasabah}
+                                    className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border text-[11px] transition ${
+                                      item.hasSlikNasabah
+                                        ? "border-error-200 bg-error-500 text-slate-700 hover:bg-red-200"
+                                        : "border-error-200 bg-error-500 text-slate-400 cursor-not-allowed"
+                                    }`}
+                                    title="Hapus SLIK Nasabah"
+                                    aria-label="Hapus SLIK Nasabah"
+                                  >
+                                    <FaTrash aria-hidden="true" />
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-[84px_1fr] items-center gap-2">
+                                <span className="text-[10px] font-semibold uppercase text-slate-500">
+                                  Penanggung
+                                </span>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUploadSlik(item, "penanggung")}
+                                    className="inline-flex h-8 min-w-[130px] items-center justify-center gap-1 rounded-lg border border-indigo-200
+                                    bg-indigo-100 px-3 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-200 transition"
+                                  >
+                                    {item.hasSlikPenanggung ? "Ulang Penanggung" : "Upload Penanggung"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteSlik(item, "penanggung")}
+                                    disabled={!item.hasSlikPenanggung}
+                                    className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border text-[11px] transition ${
+                                      item.hasSlikPenanggung
+                                        ? "border-error-200 bg-error-500 text-slate-700 hover:bg-red-200"
+                                        : "border-error-200 bg-error-500 text-slate-400 cursor-not-allowed"
+                                    }`}
+                                    title="Hapus SLIK Penanggung"
+                                    aria-label="Hapus SLIK Penanggung"
+                                  >
+                                    <FaTrash aria-hidden="true" />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 sm:px-6 py-3">
+                            <div className="grid gap-2">
+                              <div className="grid grid-cols-[84px_auto] items-center justify-center gap-2">
+                                <span className="text-[10px] font-semibold uppercase text-slate-500">
+                                  Nasabah
+                                </span>
+                                {item.hasSlikNasabah ? (
+                                  <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-emerald-200">
+                                    Success
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-amber-200">
+                                    Pending
+                                  </span>
+                                )}
+                              </div>
+                              <div className="grid grid-cols-[84px_auto] items-center justify-center gap-2">
+                                <span className="text-[10px] font-semibold uppercase text-slate-500">
+                                  Penanggung
+                                </span>
+                                {item.hasSlikPenanggung ? (
+                                  <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-emerald-200">
+                                    Success
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-amber-200">
+                                    Pending
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              ) : null}
+              {!isAdmin && (
+                <table className="min-w-full text-sm divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-4 sm:px-6 py-3 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wider w-16">No</th>
@@ -924,9 +1592,9 @@ const handleSave = async () => {
                         className="border-b even:bg-gray-50/60 hover:bg-indigo-50/40 transition-colors duration-200"
                       >
                         {/* No */}
-                          <td className="px-4 sm:px-6 py-3 text-sm text-gray-500 text-center">
-                            {startIndex + i + 1}
-                          </td>
+                        <td className="px-4 sm:px-6 py-3 text-sm text-gray-500 text-center">
+                          {i + 1}
+                        </td>
 
                         {/* No Permohonan */}
                         <td className="px-4 sm:px-6 py-3 font-semibold text-gray-800">
@@ -935,7 +1603,12 @@ const handleSave = async () => {
 
                         {/* NIK */}
                         <td className="px-4 sm:px-6 py-3 text-sm text-gray-600">
-                          {item.nik || "-"}
+                          <div className="flex flex-col gap-1">
+                            <span>Nasabah: {item.nik || "-"}</span>
+                            <span className="text-[11px] text-gray-400">
+                              Penanggung Jawab: {item.nikPenanggung || "-"}
+                            </span>
+                          </div>
                         </td>
 
                         {/* Jenis Kredit */}
@@ -946,9 +1619,9 @@ const handleSave = async () => {
                         ) : null}
 
                         {/* Tanggal */}
-                          <td className="px-4 sm:px-6 py-3 text-sm text-gray-600 text-center">
-                            {formatDate(getKreditDateValue(item))}
-                          </td>
+                        <td className="px-4 sm:px-6 py-3 text-sm text-gray-600 text-center">
+                          {formatDate(item.createdAt)}
+                        </td>
 
                         {/* Status Action */}
                         {showKeputusan ? (
@@ -971,7 +1644,7 @@ const handleSave = async () => {
                         <td className="px-4 sm:px-6 py-3 whitespace-nowrap">
                           <div className="flex flex-wrap items-center justify-center gap-2">
 
-                            {!isKomiteCabang && !isPenyelia ? (
+                            {!isKomiteCabang ? (
                               <>
                                 <button
                                   onClick={() => {
@@ -1133,43 +1806,11 @@ const handleSave = async () => {
                   )}
                 </tbody>
               </table>
-              </div>
-              <div className="flex flex-col gap-3 border-t border-gray-200 px-4 py-3 text-xs text-gray-500 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-                <div>
-                  Menampilkan {totalItems ? startIndex + 1 : 0}-{endIndex} dari{" "}
-                  {totalItems} data
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setCurrentPage((prev) => Math.max(1, prev - 1))
-                    }
-                    disabled={safePage <= 1}
-                    className="rounded-lg border border-gray-200 px-3 py-1 text-xs font-semibold text-gray-600 transition hover:border-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Sebelumnya
-                  </button>
-                  <span className="text-xs font-medium text-gray-600">
-                    Halaman {safePage} dari {totalPages}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setCurrentPage((prev) =>
-                        Math.min(totalPages, prev + 1)
-                      )
-                    }
-                    disabled={safePage >= totalPages}
-                    className="rounded-lg border border-gray-200 px-3 py-1 text-xs font-semibold text-gray-600 transition hover:border-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Berikutnya
-                  </button>
-                </div>
-              </div>
+              )}
             </div>
-          </main>
-        </div>
+          </div>
+        </main>
+      </div>
 
       {/* ================= MODAL ACCEPT ================= */}
       {showModal && (
@@ -1183,7 +1824,7 @@ const handleSave = async () => {
             <textarea
               value={keterangan}
               onChange={(e) => setKeterangan(e.target.value)}
-              disabled={!canEditKeputusan || isKomiteCabang}
+              disabled={!canEditKeputusan}
               className="w-full border rounded-md p-2 mb-4 text-sm resize-none disabled:bg-gray-100 disabled:text-gray-500"
               rows={3}
               placeholder="Masukkan keterangan..."
@@ -1207,7 +1848,7 @@ const handleSave = async () => {
             <select
               value={statusPermohonan}
               onChange={(e) => setStatusPermohonan(e.target.value)}
-              disabled={!canEditKeputusan || isKomiteCabang}
+              disabled={!canEditKeputusan}
               className="w-full border rounded-md p-2 mb-6 text-sm disabled:bg-gray-100 disabled:text-gray-500"
             >
               <option value="">Pilih Status</option>
@@ -1219,9 +1860,8 @@ const handleSave = async () => {
             <input
               type="text"
               value={plafonPermohonan}
-              onChange={handleCurrencyChange(setPlafonPermohonan)}
-              disabled={!isPenyelia}
-              className="w-full border rounded-md p-2 mb-4 text-sm disabled:bg-gray-100 disabled:text-gray-500"
+              readOnly
+              className="w-full border rounded-md p-2 mb-4 text-sm bg-gray-100 text-gray-600"
             />
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
@@ -1233,7 +1873,7 @@ const handleSave = async () => {
                   type="text"
                   value={sukuBunga}
                   onChange={(e) => setSukuBunga(e.target.value)}
-                  disabled={!isPenyelia}
+                  disabled={!canEditKeputusanAll}
                   className="w-full border rounded-md p-2 text-sm disabled:bg-gray-100 disabled:text-gray-500"
                 />
               </div>
@@ -1244,7 +1884,7 @@ const handleSave = async () => {
                 <select
                   value={jenisPerhitungan}
                   onChange={(e) => setJenisPerhitungan(e.target.value)}
-                  disabled={!isPenyelia}
+                  disabled={!canEditKeputusanAll}
                   className="w-full border rounded-md p-2 text-sm disabled:bg-gray-100 disabled:text-gray-500"
                 >
                   <option value="">Pilih</option>
@@ -1261,7 +1901,7 @@ const handleSave = async () => {
               type="text"
               value={caraPengembalianKredit}
               onChange={(e) => setCaraPengembalianKredit(e.target.value)}
-              disabled={!canEditKeputusanAll || isKomiteCabang}
+              disabled={!canEditKeputusanAll}
               className="w-full border rounded-md p-2 mb-6 text-sm disabled:bg-gray-100 disabled:text-gray-500"
             />
 

@@ -65,6 +65,7 @@ const Select = ({
   onChange,
   options = [],
   placeholder,
+  disabled = false,
 }) => (
   <div className="space-y-1">
     <label className="text-xs font-medium text-slate-600">
@@ -73,8 +74,10 @@ const Select = ({
     <select
       value={value}
       onChange={onChange}
+      disabled={disabled}
       className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm
-      bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-500"
+      bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-500
+      disabled:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed"
     >
       {placeholder ? <option value="">{placeholder}</option> : null}
       {options.map((option) => {
@@ -151,10 +154,10 @@ const UploadButton = ({ label, file, onChange }) => {
 };
 
 const JENIS_USAHA_OPTIONS = [
-  "Pertanian/Perkebunan",
-  "Peternakan/Perikanan",
+  "Pertanian / Perkebunan",
+  "Peternakan / Perikanan",
   "Pertambangan",
-  "Pabrikasi/Perindustrian",
+  "Pabrikasi / Perindustrian",
   "Konstruksi",
   "Perdagangan",
   "Jasa Keuangan",
@@ -164,6 +167,134 @@ const JENIS_USAHA_OPTIONS = [
   "Kehutanan",
   "Transportasi",
 ];
+
+const normalizeJenisUsahaKey = (value) =>
+  String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+const BIDANG_USAHA_OPTIONS = {
+  pertanianperkebunan: [
+    "Padi / Palawija",
+    "Hortikultura (Sayur & Buah)",
+    "Tanaman Perkebunan (Kelapa, Kopi, Kakao, Tebu)",
+    "Bibit / Benih",
+    "Pupuk & Sarana Pertanian",
+    "Penggilingan Padi",
+    "Hasil Pertanian (Distributor/Gudang)",
+  ],
+  peternakanperikanan: [
+    "Peternakan Sapi",
+    "Peternakan Kambing",
+    "Peternakan Ayam Petelur",
+    "Peternakan Ayam Pedaging",
+    "Peternakan Itik",
+    "Pakan Ternak",
+    "Budidaya Ikan Air Tawar",
+    "Budidaya Ikan Air Laut",
+    "Nelayan / Penangkapan Ikan",
+    "Pengolahan Hasil Perikanan",
+  ],
+  pertambangan: [
+    "Galian C (Pasir, Batu, Kerikil)",
+    "Tambang Batu Bara",
+    "Tambang Emas",
+    "Tambang Nikel",
+    "Tambang Batu Kapur",
+    "Tambang Tanah Liat",
+    "Jasa Alat Berat Tambang",
+  ],
+  pabrikasiperindustrian: [
+    "Industri Makanan & Minuman",
+    "Industri Roti / Kue",
+    "Industri Penggilingan / Pengolahan",
+    "Industri Tekstil / Konveksi",
+    "Industri Furniture / Kayu",
+    "Industri Percetakan",
+    "Industri Plastik",
+    "Industri Kerajinan",
+    "Industri Material Bangunan",
+  ],
+  konstruksi: [
+    "Kontraktor Bangunan",
+    "Kontraktor Jalan / Infrastruktur",
+    "Kontraktor Listrik",
+    "Kontraktor Air / Plumbing",
+    "Tukang Bangunan / Borongan",
+    "Supplier Material Bangunan",
+    "Jasa Arsitek / Desain Interior",
+  ],
+  perdagangan: [
+    "Toko Sembako / Grosir",
+    "Warung Kelontong",
+    "Minimarket",
+    "Toko Pakaian",
+    "Toko Elektronik",
+    "Toko Bangunan",
+    "Apotek / Alkes",
+    "Penjualan Motor / Mobil",
+    "Penjualan Online (Marketplace)",
+    "Distributor / Agen",
+  ],
+  jasakeuangan: [
+    "Koperasi Simpan Pinjam",
+    "Agen BRILink / Agen Bank",
+    "Pegadaian / Gadai",
+    "Leasing / Pembiayaan",
+    "Money Changer",
+    "Asuransi (Agen)",
+    "Akuntan / Konsultan Pajak",
+  ],
+  jasaperorangan: [
+    "Salon / Barbershop",
+    "Laundry",
+    "Penjahit / Konveksi Kecil",
+    "Bengkel Motor",
+    "Bengkel Mobil",
+    "Tukang Las",
+    "Jasa Service Elektronik",
+    "Jasa Fotokopi / ATK",
+  ],
+  jasaumum: [
+    "Event Organizer",
+    "Cleaning Service",
+    "Keamanan (Security)",
+    "Rental Mobil / Motor",
+    "Jasa Titip (Jastip)",
+    "Jasa Pengiriman / Kurir",
+    "Percetakan / Advertising",
+  ],
+  jasawisata: [
+    "Travel / Tour Agent",
+    "Hotel / Penginapan",
+    "Homestay",
+    "Restoran / Rumah Makan",
+    "Cafe / Kuliner",
+    "Rental Peralatan Wisata",
+    "Jasa Guide Wisata",
+    "Oleh-oleh / Souvenir",
+  ],
+  kehutanan: [
+    "Penebangan Kayu (Resmi)",
+    "Pengolahan Kayu",
+    "Industri Meubel Kayu",
+    "Persemaian Bibit",
+    "Hasil Hutan Non Kayu (Madu, Rotan)",
+    "Distributor Kayu",
+  ],
+  transportasi: [
+    "Angkutan Barang (Truk)",
+    "Angkutan Penumpang (Travel)",
+    "Ojek Online / Ojek Pangkalan",
+    "Ekspedisi / Logistik",
+    "Rental Kendaraan",
+    "Kapal / Perahu Penyeberangan",
+    "Jasa Deliver",
+  ],
+};
+
+const getBidangUsahaOptions = (jenisUsaha) =>
+  BIDANG_USAHA_OPTIONS[normalizeJenisUsahaKey(jenisUsaha)] || [];
 
 const BENTUK_USAHA_OPTIONS = ["Perseorangan", "CV", "PT"];
 
@@ -182,7 +313,7 @@ const DATA_USAHA_FIELDS = [
     options: JENIS_USAHA_OPTIONS,
     placeholder: "Pilih Jenis Usaha",
   },
-  { key: "bidangUsaha", label: "Bidang Usaha", type: "input" },
+  { key: "bidangUsaha", label: "Bidang Usaha", type: "select" },
   {
     key: "statusUsaha",
     label: "Bentuk Usaha",
@@ -576,9 +707,24 @@ const shouldShowNpwp = toNumber(formData.plafonPinjaman) > 100000000;
 };
 
 const handleFieldChange = (field) => (event) => {
+  const value = event.target.value;
+  if (field === "jenisUsaha") {
+    setFormData((prev) => {
+      const nextBidangOptions = getBidangUsahaOptions(value);
+      const shouldReset =
+        prev.bidangUsaha && !nextBidangOptions.includes(prev.bidangUsaha);
+      return {
+        ...prev,
+        jenisUsaha: value,
+        bidangUsaha: shouldReset ? "" : prev.bidangUsaha,
+      };
+    });
+    return;
+  }
+
   setFormData((prev) => ({
     ...prev,
-    [field]: event.target.value,
+    [field]: value,
   }));
 };
 
@@ -599,6 +745,15 @@ const handleFileChange = (field) => (e) => {
     ...prev,
     [field]: file,
   }));
+  Swal.fire({
+    toast: true,
+    position: "top-end",
+    icon: "success",
+    title: "File berhasil disimpan",
+    showConfirmButton: false,
+    timer: 1200,
+    timerProgressBar: true,
+  });
 };
 
 const handleSave = async () => {
@@ -649,7 +804,7 @@ const handleSave = async () => {
 
     const plafonValue = toNumber(formData.plafonPinjaman);
     const nextRoute =
-      plafonValue > 40000000
+      plafonValue > 10000000
         ? `/master-data/data-jaminan/${encodeURIComponent(no_permohonan)}`
         : "/dashboard";
     navigate(nextRoute);
@@ -704,8 +859,21 @@ const handleSave = async () => {
                     label={field.label}
                     value={formData[field.key]}
                     onChange={handleFieldChange(field.key)}
-                    options={field.options}
-                    placeholder={field.placeholder}
+                    options={
+                      field.key === "bidangUsaha"
+                        ? getBidangUsahaOptions(formData.jenisUsaha)
+                        : field.options
+                    }
+                    placeholder={
+                      field.key === "bidangUsaha"
+                        ? formData.jenisUsaha
+                          ? "Pilih Bidang Usaha"
+                          : "Pilih Jenis Usaha terlebih dahulu"
+                        : field.placeholder
+                    }
+                    disabled={
+                      field.key === "bidangUsaha" && !formData.jenisUsaha
+                    }
                   />
                 ) : (
                   <Input

@@ -161,6 +161,15 @@ export default function UploadCabangKantor() {
     }
 
     setFile(nextFile);
+    Swal.fire({
+      toast: true,
+      position: "top-end",
+      icon: "success",
+      title: "File berhasil disimpan",
+      showConfirmButton: false,
+      timer: 1200,
+      timerProgressBar: true,
+    });
   };
 
   const handleUpload = async () => {

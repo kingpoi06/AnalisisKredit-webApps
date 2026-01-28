@@ -15,14 +15,29 @@ import axios from "axios";
 import { API_ENDPOINTS } from "../../config/apiEndpoints";
 
 const OCR_SPACE_ENDPOINT = "https://api.ocr.space/parse/image";
-const OCR_SPACE_API_KEY = "K83392095988957";
-const OCR_SPACE_LANGUAGE = "eng";
+const OCR_SPACE_API_KEY = "K87910109088957";
+const OCR_SPACE_LANGUAGE_PRIMARY = "ind";
+const OCR_SPACE_LANGUAGE_FALLBACK = "eng";
 const OCR_SPACE_ENGINE_PRIMARY = "2";
 const OCR_SPACE_ENGINE_FALLBACK = "1";
-const OCR_FIELD_MIN_SCORE = 6;
+const OCR_FIELD_MIN_SCORE = 7;
+const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
+const MAX_OCR_SIZE = 900 * 1024;
+const OCR_MAX_DIMENSION = 1600;
+const OCR_MIN_QUALITY = 0.5;
+const OCR_QUALITY_STEP = 0.1;
+const OCR_CONTRAST = 1.45;
+const OCR_BRIGHTNESS = 1.12;
+const OCR_BINARIZE_THRESHOLD = 160;
+const OCR_CONTRAST_STRONG = 1.6;
+const OCR_BRIGHTNESS_STRONG = 1.2;
+const OCR_BINARIZE_THRESHOLD_STRONG = 150;
 
 const normalizeOcrText = (text) => String(text ?? "").replace(/\r/g, "").trim();
-const normalizeLine = (line) => String(line ?? "").replace(/\s+/g, " ").trim();
+const stripLeadingSymbols = (value) =>
+  String(value ?? "").replace(/^[\s:;.,-]+/, "").trim();
+const normalizeLine = (line) =>
+  stripLeadingSymbols(String(line ?? "").replace(/\s+/g, " ").trim());
 const getOcrLines = (text) =>
   normalizeOcrText(text)
     .split("\n")
@@ -45,6 +60,7 @@ const NAME_INVALID_TOKENS = [
   "TGL",
   "TTL",
   "LAHIR",
+  "NAMA",
   "JENIS",
   "KELAMIN",
   "ALAMAT",
@@ -113,6 +129,11 @@ const normalizeLabelToken = (value) =>
 const simplifyLabel = (value) =>
   normalizeLabelToken(value).replace(/[^A-Z/]/g, "");
 
+const isNamaLabel = (value) => {
+  const simplified = simplifyLabel(value);
+  return simplified === "NAMA" || simplified.startsWith("NAMALENGKAP");
+};
+
 const isRtRwLabel = (value) => {
   const simplified = simplifyLabel(value);
   if (simplified.includes("RTRW") || simplified.includes("RT/RW")) return true;
@@ -147,30 +168,39 @@ const isAlamatLabel = (value) => {
 const pickFirstMatch = (text, patterns) => {
   for (const pattern of patterns) {
     const match = text.match(pattern);
-    if (match && match[1]) return match[1].trim();
+    if (match && match[1]) return stripLeadingSymbols(match[1]);
   }
   return "";
 };
 
 const stripAfterKeywords = (value, keywords) => {
   if (!value) return "";
-  const upper = value.toUpperCase();
-  let cutIndex = value.length;
+  const raw = String(value ?? "");
+  const upper = raw.toUpperCase();
+  let cutIndex = raw.length;
   keywords.forEach((keyword) => {
     const idx = upper.indexOf(keyword);
     if (idx > 0 && idx < cutIndex) {
       cutIndex = idx;
     }
   });
-  return value.slice(0, cutIndex).replace(/[,:-]+$/, "").trim();
+  return stripLeadingSymbols(raw.slice(0, cutIndex).replace(/[,:-]+$/, ""));
+};
+
+const isLikelyNameValue = (value) => {
+  const normalized = normalizeLine(value);
+  if (!normalized) return false;
+  if (/[/:]/.test(normalized)) return false;
+  if (/\d/.test(normalized)) return false;
+  if (hasAnyKeyword(normalized, NAME_INVALID_TOKENS)) return false;
+  return true;
 };
 
 const cleanNamaCandidate = (value) => {
   const cleaned = stripAfterKeywords(value, NAME_CUTOFF_KEYWORDS);
   const normalized = normalizeLine(cleaned);
   if (!normalized) return "";
-  if (hasAnyKeyword(normalized, NAME_INVALID_TOKENS)) return "";
-  if (/\d{3,}/.test(normalized)) return "";
+  if (!isLikelyNameValue(normalized)) return "";
   return normalized;
 };
 
@@ -195,6 +225,21 @@ const extractNamaLengkap = (lines, text) => {
   ];
   const direct = cleanNamaCandidate(pickFirstMatch(text, patterns));
   if (direct) return direct;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!isNamaLabel(line)) continue;
+    const inlineMatch = line.match(
+      /N\s*A\s*M\s*A(?:\s*L\s*E\s*N\s*G\s*K\s*A\s*P)?\s*[:\-]?\s*(.*)/i
+    );
+    const inlineValue = cleanNamaCandidate(inlineMatch?.[1] || "");
+    if (inlineValue) return inlineValue;
+    for (let j = i + 1; j < lines.length && j <= i + 2; j += 1) {
+      const candidate = cleanNamaCandidate(lines[j]);
+      if (candidate) return candidate;
+      if (hasAnyKeyword(lines[j], NAME_INVALID_TOKENS)) break;
+    }
+  }
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
@@ -632,7 +677,7 @@ const extractKtpFieldsFromText = (text) => {
     /PROVINSI\s*[:\-]?\s*([^\n]+)/i,
   ]);
 
-  return {
+  return postProcessKtpFields({
     nik,
     namaLengkap,
     tempatLahir,
@@ -649,7 +694,81 @@ const extractKtpFieldsFromText = (text) => {
     kecamatan,
     kabupaten,
     provinsi,
-  };
+  });
+};
+
+const LABEL_PREFIX_REGEX = /^(?:N[I1]K|NAMA|N4MA|TEMPAT\/?T?G?L?\s*LAHIR|TGL\s*LAHIR|TTL|JENIS\s+KELAMIN|KELAMIN|ALAMAT|ALAMT|ALAMAI|IAMAT|LAMAT|RT\s*\/?\s*RW|KELURAHAN|KEL\/DESA|KEL\s*\/\s*DESA|KEL\b|DESA|KECAMATAN|ECAMATAN|KABUPATEN|KAB\/KOTA|KAB\b|KOTA|PROVINSI|AGAMA|STATUS\s*PERKAW[I1]NAN|STATUS\s*KAW[I1]N|PEKERJAAN|PKERJAAN|KEWARGANEGARAAN|WARGANEGARAAN|GOL\.?\s*DARAH)\b[\s:.,/-]*/i;
+
+const stripLeadingLabelTokens = (value) => {
+  if (!value) return value;
+  let cleaned = String(value).trim().replace(/^[\s:.,/-]+/, "");
+  for (let i = 0; i < 2; i += 1) {
+    const next = cleaned.replace(LABEL_PREFIX_REGEX, "").trim().replace(/^[\s:.,/-]+/, "");
+    if (next === cleaned) break;
+    cleaned = next;
+  }
+  return cleaned;
+};
+
+const cleanFieldByLabel = (value, field) => {
+  if (!value) return "";
+  let cleaned = stripLeadingLabelTokens(value);
+  const upper = cleaned.toUpperCase();
+  switch (field) {
+    case "namaLengkap":
+      if (upper.startsWith("AMA ")) cleaned = cleaned.slice(3).trim();
+      break;
+    case "alamatLengkap":
+      cleaned = cleaned.replace(/^(?:ALAMAT|ALAMT|IAMAT|LAMAT)\b[:\s-]*/i, "");
+      break;
+    case "desaKelurahan":
+      cleaned = cleaned.replace(/^(?:KELURAHAN|KEL\/DESA|KEL\s*\/\s*DESA|KEL\b|DESA|DE5A)\b[:\s-]*/i, "");
+      break;
+    case "kecamatan":
+      cleaned = cleaned.replace(/^(?:KECAMATAN|ECAMATAN|KECAM4TAN)\b[:\s-]*/i, "");
+      break;
+    case "kabupaten":
+      cleaned = cleaned.replace(/^(?:KABUPATEN|KAB\/KOTA|KAB\b|KOTA)\b[:\s-]*/i, "");
+      break;
+    case "provinsi":
+      cleaned = cleaned.replace(/^(?:PROVINSI|PROV)\b[:\s-]*/i, "");
+      break;
+    case "agama":
+      cleaned = cleaned.replace(/^(?:AGAMA|AG4MA)\b[:\s-]*/i, "");
+      break;
+    case "statusPerkawinan":
+      cleaned = cleaned.replace(/^(?:STATUS\s*PERKAW[I1]NAN|STATUS\s*KAW[I1]N)\b[:\s-]*/i, "");
+      break;
+    case "jenispekerjaan":
+      cleaned = cleaned.replace(/^(?:PEKERJAAN|PKERJAAN|PEKERJAA?N|KERJAAN)\b[:\s-]*/i, "");
+      break;
+    case "kewarganegaraan":
+      cleaned = cleaned.replace(/^(?:KEWARGANEGARAAN|WARGANEGARAAN)\b[:\s-]*/i, "");
+      break;
+    default:
+      break;
+  }
+  return normalizeLine(cleaned);
+};
+
+const postProcessKtpFields = (fields) => {
+  const next = { ...fields };
+  next.namaLengkap = cleanFieldByLabel(next.namaLengkap, "namaLengkap");
+  next.tempatLahir = cleanFieldByLabel(next.tempatLahir, "tempatLahir");
+  next.alamatLengkap = cleanFieldByLabel(next.alamatLengkap, "alamatLengkap");
+  next.desaKelurahan = cleanFieldByLabel(next.desaKelurahan, "desaKelurahan");
+  next.kecamatan = cleanFieldByLabel(next.kecamatan, "kecamatan");
+  next.kabupaten = cleanFieldByLabel(next.kabupaten, "kabupaten");
+  next.provinsi = cleanFieldByLabel(next.provinsi, "provinsi");
+  next.agama = cleanFieldByLabel(next.agama, "agama");
+  next.statusPerkawinan = cleanFieldByLabel(next.statusPerkawinan, "statusPerkawinan");
+  next.jenispekerjaan = cleanFieldByLabel(next.jenispekerjaan, "jenispekerjaan");
+  const kewarganegaraan = cleanFieldByLabel(next.kewarganegaraan, "kewarganegaraan");
+  const upper = kewarganegaraan.toUpperCase();
+  if (/\bWNI\b/.test(upper)) next.kewarganegaraan = "WNI";
+  else if (/\bWNA\b/.test(upper)) next.kewarganegaraan = "WNA";
+  else next.kewarganegaraan = "";
+  return next;
 };
 
 const mergeIfPresent = (prev, updates) => {
@@ -661,6 +780,101 @@ const mergeIfPresent = (prev, updates) => {
   });
   return next;
 };
+
+const formatDateInput = (value) => {
+  if (!value) return "";
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return trimmed;
+    }
+    const dmyMatch = trimmed.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/);
+    if (dmyMatch) {
+      return `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`;
+    }
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const normalizeOcrValue = (value) => {
+  if (value === null || value === undefined) return "";
+  return String(value).replace(/\s+/g, " ").trim();
+};
+
+const normalizeOcrDigits = (value) =>
+  normalizeOcrValue(value).replace(/\D/g, "");
+
+const getFieldValue = (source, keys, fallback = "") => {
+  for (const key of keys) {
+    const value = source?.[key];
+    if (value !== undefined && value !== null) {
+      return value;
+    }
+  }
+  return fallback;
+};
+
+const fillMissingFields = (base, fallback) => {
+  const next = { ...(base || {}) };
+  Object.entries(fallback || {}).forEach(([key, value]) => {
+    if (String(next[key] ?? "").trim() === "" && String(value ?? "").trim() !== "") {
+      next[key] = value;
+    }
+  });
+  return next;
+};
+
+const normalizeOcrFields = (fields = {}) => {
+  const cleaned = postProcessKtpFields({
+    ...fields,
+    jenisKelamin: normalizeJenisKelamin(fields.jenisKelamin || ""),
+    tanggalLahir: formatDateInput(fields.tanggalLahir),
+  });
+  return {
+    ...cleaned,
+    nik: normalizeOcrDigits(cleaned.nik),
+    namaLengkap: normalizeOcrValue(cleaned.namaLengkap),
+    tempatLahir: normalizeOcrValue(cleaned.tempatLahir),
+    tanggalLahir: formatDateInput(cleaned.tanggalLahir),
+    jenisKelamin: normalizeOcrValue(cleaned.jenisKelamin),
+    statusPerkawinan: normalizeOcrValue(cleaned.statusPerkawinan),
+    agama: normalizeOcrValue(cleaned.agama),
+    kewarganegaraan: normalizeOcrValue(cleaned.kewarganegaraan),
+    jenispekerjaan: normalizeOcrValue(cleaned.jenispekerjaan),
+    alamatLengkap: normalizeOcrValue(cleaned.alamatLengkap),
+    rt: normalizeOcrDigits(cleaned.rt),
+    rw: normalizeOcrDigits(cleaned.rw),
+    desaKelurahan: normalizeOcrValue(cleaned.desaKelurahan),
+    kecamatan: normalizeOcrValue(cleaned.kecamatan),
+    kabupaten: normalizeOcrValue(cleaned.kabupaten),
+    provinsi: normalizeOcrValue(cleaned.provinsi),
+  };
+};
+
+const normalizeServerOcrFields = (data) =>
+  normalizeOcrFields({
+    nik: getFieldValue(data, ["nikKTP", "nik", "NIK"]),
+    namaLengkap: getFieldValue(data, ["namaLengkap", "namalengkap", "nama_lengkap", "nama"]),
+    tempatLahir: getFieldValue(data, ["tempatLahir", "tempatlahir", "tempat_lahir"]),
+    tanggalLahir: getFieldValue(data, ["tanggalLahir", "tanggallahir", "tanggal_lahir"]),
+    jenisKelamin: getFieldValue(data, ["jenisKelamin", "jeniskelamin", "jenis_kelamin"]),
+    statusPerkawinan: getFieldValue(data, ["statusPerkawinan", "statusperkawinan", "status_perkawinan"]),
+    agama: getFieldValue(data, ["agama"]),
+    kewarganegaraan: getFieldValue(data, ["kewarganegaraan"]),
+    jenispekerjaan: getFieldValue(data, ["jenispekerjaan", "jenisPekerjaan", "jenis_pekerjaan", "pekerjaan"]),
+    alamatLengkap: getFieldValue(data, ["alamatLengkap", "alamatlengkap", "alamat_lengkap", "alamat"]),
+    rt: getFieldValue(data, ["rt"]),
+    rw: getFieldValue(data, ["rw"]),
+    desaKelurahan: getFieldValue(data, ["desaKelurahan", "desakelurahan", "desa_kelurahan"]),
+    kecamatan: getFieldValue(data, ["kecamatan"]),
+    kabupaten: getFieldValue(data, ["kabupaten", "kabupatenKota", "kabupaten_kota", "kota"]),
+    provinsi: getFieldValue(data, ["provinsi"]),
+  });
 
 const readOcrSpaceText = (data) => {
   const errorMessage = data?.ErrorMessage;
@@ -683,8 +897,140 @@ const readOcrSpaceText = (data) => {
   return parsedText;
 };
 
+const canvasToBlob = (canvas, quality) =>
+  new Promise((resolve) => {
+    canvas.toBlob(resolve, "image/jpeg", quality);
+  });
+
+const applyOcrBinarize = (ctx, width, height, threshold) => {
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+  const safeThreshold = Number.isFinite(threshold)
+    ? threshold
+    : OCR_BINARIZE_THRESHOLD;
+  for (let i = 0; i < data.length; i += 4) {
+    const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+    const value = gray >= safeThreshold ? 255 : 0;
+    data[i] = value;
+    data[i + 1] = value;
+    data[i + 2] = value;
+  }
+  ctx.putImageData(imageData, 0, 0);
+};
+
+const loadImageFromFile = (file) =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+
+const prepareCompressedFile = async (file, targetSize, options = {}) => {
+  if (!file) return file;
+  const {
+    enhanceForOcr = false,
+    binarize = false,
+    contrast = OCR_CONTRAST,
+    brightness = OCR_BRIGHTNESS,
+    binarizeThreshold = OCR_BINARIZE_THRESHOLD,
+  } = options;
+  if (file.size <= targetSize && !enhanceForOcr && !binarize) {
+    return file;
+  }
+
+  const image = await loadImageFromFile(file);
+  const scale = Math.min(
+    1,
+    OCR_MAX_DIMENSION / Math.max(image.width, image.height)
+  );
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  const ctx = canvas.getContext("2d");
+  const drawImageToCanvas = () => {
+    ctx.filter = enhanceForOcr
+      ? `grayscale(1) contrast(${contrast}) brightness(${brightness})`
+      : "none";
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    if (binarize) {
+      applyOcrBinarize(ctx, canvas.width, canvas.height, binarizeThreshold);
+    }
+  };
+  drawImageToCanvas();
+
+  let quality = enhanceForOcr ? 0.9 : 0.85;
+  let blob = await canvasToBlob(canvas, quality);
+  while (blob && blob.size > targetSize && quality > OCR_MIN_QUALITY) {
+    quality = Math.max(OCR_MIN_QUALITY, quality - OCR_QUALITY_STEP);
+    drawImageToCanvas();
+    blob = await canvasToBlob(canvas, quality);
+  }
+
+  while (
+    blob &&
+    blob.size > targetSize &&
+    canvas.width > 800 &&
+    canvas.height > 800
+  ) {
+    canvas.width = Math.max(1, Math.round(canvas.width * 0.85));
+    canvas.height = Math.max(1, Math.round(canvas.height * 0.85));
+    drawImageToCanvas();
+    quality = 0.8;
+    blob = await canvasToBlob(canvas, quality);
+  }
+
+  while (
+    blob &&
+    blob.size > targetSize &&
+    (canvas.width > 420 || canvas.height > 420)
+  ) {
+    canvas.width = Math.max(420, Math.round(canvas.width * 0.8));
+    canvas.height = Math.max(420, Math.round(canvas.height * 0.8));
+    drawImageToCanvas();
+    quality = Math.max(0.4, quality - OCR_QUALITY_STEP);
+    blob = await canvasToBlob(canvas, quality);
+  }
+
+  if (!blob) return file;
+  return new File([blob], `ocr-${file.name.replace(/\.[^.]+$/, "")}.jpg`, {
+    type: "image/jpeg",
+  });
+};
+
+const prepareOcrFile = (file) =>
+  prepareCompressedFile(file, MAX_OCR_SIZE, {
+    enhanceForOcr: true,
+    contrast: OCR_CONTRAST,
+    brightness: OCR_BRIGHTNESS,
+  });
+const prepareOcrFileBinarized = (file) =>
+  prepareCompressedFile(file, MAX_OCR_SIZE, {
+    enhanceForOcr: true,
+    binarize: true,
+    contrast: OCR_CONTRAST,
+    brightness: OCR_BRIGHTNESS,
+    binarizeThreshold: OCR_BINARIZE_THRESHOLD,
+  });
+const prepareOcrFileStrongBinarized = (file) =>
+  prepareCompressedFile(file, MAX_OCR_SIZE, {
+    enhanceForOcr: true,
+    binarize: true,
+    contrast: OCR_CONTRAST_STRONG,
+    brightness: OCR_BRIGHTNESS_STRONG,
+    binarizeThreshold: OCR_BINARIZE_THRESHOLD_STRONG,
+  });
+const prepareUploadFile = (file) =>
+  prepareCompressedFile(file, MAX_UPLOAD_SIZE);
+
 const requestOcrSpace = async (file, options = {}) => {
-  const { language = OCR_SPACE_LANGUAGE, engine = OCR_SPACE_ENGINE_PRIMARY } =
+  const {
+    language = OCR_SPACE_LANGUAGE_PRIMARY,
+    engine = OCR_SPACE_ENGINE_PRIMARY,
+  } =
     options;
   const formDataUpload = new FormData();
   formDataUpload.append("apikey", OCR_SPACE_API_KEY);
@@ -707,6 +1053,24 @@ const requestOcrSpace = async (file, options = {}) => {
   return response.json();
 };
 
+const requestServerOcr = async (file) => {
+  const ocrFile = await prepareOcrFile(file);
+  const formDataUpload = new FormData();
+  formDataUpload.append("fotoKTP", ocrFile);
+
+  const response = await axios.post(
+    API_ENDPOINTS.datanasabah.ocrKtp(),
+    formDataUpload
+  );
+
+  return {
+    fields: normalizeServerOcrFields(
+      response.data?.Data ?? response.data?.data ?? {}
+    ),
+    warning: response.data?.warning ?? "",
+  };
+};
+
 const countFilledFields = (fields) =>
   Object.values(fields || {}).filter((value) =>
     String(value ?? "").trim()
@@ -720,33 +1084,93 @@ const isStrongOcrResult = (fields) => {
 
 const runOcrSpaceWithFallback = async (file) => {
   const attempts = [
-    { language: OCR_SPACE_LANGUAGE, engine: OCR_SPACE_ENGINE_PRIMARY },
-    { language: OCR_SPACE_LANGUAGE, engine: OCR_SPACE_ENGINE_FALLBACK },
+    { language: OCR_SPACE_LANGUAGE_PRIMARY, engine: OCR_SPACE_ENGINE_PRIMARY },
+    { language: OCR_SPACE_LANGUAGE_PRIMARY, engine: OCR_SPACE_ENGINE_FALLBACK },
+    { language: OCR_SPACE_LANGUAGE_FALLBACK, engine: OCR_SPACE_ENGINE_PRIMARY },
   ];
   let bestFields = {};
   let bestScore = 0;
   let lastError = null;
 
-  for (const attempt of attempts) {
-    try {
-      const ocrResponse = await requestOcrSpace(file, attempt);
-      const ocrText = readOcrSpaceText(ocrResponse);
-      const parsedFields = extractKtpFieldsFromText(ocrText);
-      const score = countFilledFields(parsedFields);
-      if (score > bestScore) {
-        bestScore = score;
-        bestFields = parsedFields;
+  const tryAttempts = async (variantFile) => {
+    if (!variantFile) return null;
+    for (const attempt of attempts) {
+      try {
+        const ocrResponse = await requestOcrSpace(variantFile, attempt);
+        const ocrText = readOcrSpaceText(ocrResponse);
+        const parsedFields = extractKtpFieldsFromText(ocrText);
+        const score = countFilledFields(parsedFields);
+        if (score > bestScore) {
+          bestScore = score;
+          bestFields = parsedFields;
+        }
+        if (isStrongOcrResult(parsedFields)) {
+          return parsedFields;
+        }
+      } catch (error) {
+        lastError = error;
       }
-      if (isStrongOcrResult(parsedFields)) {
-        return parsedFields;
-      }
-    } catch (error) {
-      lastError = error;
     }
-  }
+    return null;
+  };
+
+  const enhancedFile = await prepareOcrFile(file);
+  const primaryResult = await tryAttempts(enhancedFile);
+  if (primaryResult) return primaryResult;
+
+  const binarizedFile = await prepareOcrFileBinarized(file);
+  const binarizedResult = await tryAttempts(binarizedFile);
+  if (binarizedResult) return binarizedResult;
+
+  const strongBinarizedFile = await prepareOcrFileStrongBinarized(file);
+  const strongResult = await tryAttempts(strongBinarizedFile);
+  if (strongResult) return strongResult;
 
   if (bestScore > 0) return bestFields;
   throw lastError || new Error("Hasil OCR kosong.");
+};
+
+const resolveOcrFields = async (file) => {
+  let localFields = null;
+  let localError = null;
+  try {
+    const ocrLocal = await runOcrSpaceWithFallback(file);
+    localFields = normalizeOcrFields(ocrLocal);
+  } catch (error) {
+    localError = error;
+  }
+
+  if (localFields && isStrongOcrResult(localFields)) {
+    return { fields: localFields, warning: "" };
+  }
+
+  let serverFields = null;
+  let serverWarning = "";
+  let serverError = null;
+  try {
+    const serverResult = await requestServerOcr(file);
+    serverFields = serverResult.fields;
+    serverWarning = serverResult.warning;
+  } catch (error) {
+    serverError = error;
+  }
+
+  if (!localFields && !serverFields) {
+    throw serverError || localError || new Error("Hasil OCR kosong.");
+  }
+
+  const localScore = countFilledFields(localFields);
+  const serverScore = countFilledFields(serverFields);
+  const preferServer = serverScore > localScore;
+  const primary = preferServer ? serverFields : localFields || serverFields;
+  const secondary = preferServer ? localFields : serverFields;
+  const merged = fillMissingFields(primary, secondary);
+
+  if (countFilledFields(merged) === 0) {
+    throw serverError || localError || new Error("Hasil OCR kosong.");
+  }
+
+  return { fields: merged, warning: serverWarning };
 };
 
 
@@ -827,9 +1251,12 @@ const Select = ({
 
 export default function DataDiriNasabah() {
   const navigate = useNavigate();
-  const ktpRef = useRef(null);
-  const ktpRefPasangan = useRef(null);
-  const selfieRef = useRef(null);
+  const ktpCameraRef = useRef(null);
+  const ktpGalleryRef = useRef(null);
+  const ktpPasanganCameraRef = useRef(null);
+  const ktpPasanganGalleryRef = useRef(null);
+  const selfieCameraRef = useRef(null);
+  const selfieGalleryRef = useRef(null);
   const { no_permohonan } = useParams();
 
   const [fotoKtp, setFotoKtp] = useState(null);
@@ -919,9 +1346,61 @@ const formatIdInteger = (value) => {
   }, [navigate]);
   
 
-  const handleCamera = (ref) => {
+const processImageFile = async (file, setter, label, inputEl) => {
+  if (!file) {
+    setter(null);
+    return;
+  }
+  if (file.size > MAX_UPLOAD_SIZE) {
+    Swal.fire("Error", "Ukuran file maksimum 20MB", "error");
+    if (inputEl) {
+      inputEl.value = "";
+    }
+    setter(null);
+    return;
+  }
+  const compressed = await prepareUploadFile(file);
+  setter(compressed);
+  Swal.fire({
+    toast: true,
+    position: "top-end",
+    icon: "success",
+    title: `${label || "Foto"} berhasil disimpan`,
+    showConfirmButton: false,
+    timer: 1200,
+    timerProgressBar: true,
+  });
+};
+
+const handleCamera = (ref) => {
+  if (ref?.current) {
     ref.current.click();
-  };
+  }
+};
+
+const handlePickImageSource = async (cameraRef, galleryRef) => {
+  const result = await Swal.fire({
+    title: "Pilih sumber foto",
+    text: "Gunakan kamera atau pilih dari galeri",
+    icon: "question",
+    showCancelButton: true,
+    showDenyButton: true,
+    confirmButtonText: "Kamera",
+    denyButtonText: "Galeri",
+    cancelButtonText: "Batal",
+  });
+
+  if (result.isConfirmed) {
+    handleCamera(cameraRef);
+  } else if (result.isDenied) {
+    handleCamera(galleryRef);
+  }
+};
+
+const handleImageFileChange = (setter, label) => async (event) => {
+  const file = event.target.files?.[0];
+  await processImageFile(file, setter, label, event.target);
+};
 
 const openMaps = () => {
   if (!navigator.geolocation) {
@@ -960,21 +1439,17 @@ const handleValidasiKtp = async () => {
       didOpen: () => Swal.showLoading(),
     });
 
-    const parsedFields = await runOcrSpaceWithFallback(fotoKtp);
-    const hasData = Object.values(parsedFields).some((value) =>
-      String(value ?? "").trim()
-    );
-    if (!hasData) {
-      throw new Error("Hasil OCR belum terbaca. Coba foto ulang.");
-    }
+    const { fields, warning } = await resolveOcrFields(fotoKtp);
+    setFormData((prev) => mergeIfPresent(prev, fields));
 
-    setFormData((prev) => mergeIfPresent(prev, parsedFields));
-
-    Swal.fire("Berhasil", "Data KTP berhasil divalidasi", "success");
+    const successMessage = warning
+      ? `Data KTP berhasil divalidasi. ${warning}`
+      : "Data KTP berhasil divalidasi";
+    Swal.fire("Berhasil", successMessage, warning ? "warning" : "success");
   } catch (error) {
     Swal.fire(
       "Gagal",
-      error?.message || "Validasi KTP gagal",
+      error.response?.data?.msg || error?.message || "Validasi KTP gagal",
       "error"
     );
   }
@@ -994,28 +1469,24 @@ const handleValidasiKtpPasangan = async () => {
       didOpen: () => Swal.showLoading(),
     });
 
-    const parsedFields = await runOcrSpaceWithFallback(fotoKtpPasangan);
+    const { fields, warning } = await resolveOcrFields(fotoKtpPasangan);
     const pasanganFields = {
-      nikPenanggungJawab: parsedFields.nik || "",
-      namaPenanggungJawab: parsedFields.namaLengkap || "",
-      pekerjaanPenanggungJawab: parsedFields.jenispekerjaan || "",
-      tempatLahirPenanggungJawab: parsedFields.tempatLahir || "",
-      tanggalLahirPenanggungJawab: parsedFields.tanggalLahir || "",
+      nikPenanggungJawab: fields.nik,
+      namaPenanggungJawab: fields.namaLengkap,
+      pekerjaanPenanggungJawab: fields.jenispekerjaan,
+      tempatLahirPenanggungJawab: fields.tempatLahir,
+      tanggalLahirPenanggungJawab: fields.tanggalLahir,
     };
-    const hasData = Object.values(pasanganFields).some((value) =>
-      String(value ?? "").trim()
-    );
-    if (!hasData) {
-      throw new Error("Hasil OCR belum terbaca. Coba foto ulang.");
-    }
-
     setFormData((prev) => mergeIfPresent(prev, pasanganFields));
 
-    Swal.fire("Berhasil", "Data KTP berhasil divalidasi", "success");
+    const successMessage = warning
+      ? `Data KTP berhasil divalidasi. ${warning}`
+      : "Data KTP berhasil divalidasi";
+    Swal.fire("Berhasil", successMessage, warning ? "warning" : "success");
   } catch (error) {
     Swal.fire(
       "Gagal",
-      error?.message || "Validasi KTP gagal",
+      error.response?.data?.msg || error?.message || "Validasi KTP gagal",
       "error"
     );
   }
@@ -1033,7 +1504,7 @@ const handleSave = async () => {
       "kewarganegaraan",
       "alamatLengkap",
       "rt",
-      "rt",
+      "rw",
       "desaKelurahan",
       "kecamatan",
       "kabupaten",
@@ -1066,6 +1537,9 @@ const handleSave = async () => {
     }
 
     const payload = new FormData();
+    if (no_permohonan) {
+      payload.append("no_permohonan", no_permohonan);
+    }
     Object.entries(formData).forEach(([k, v]) => payload.append(k, v));
     payload.append("fotoKTP", fotoKtp);
     payload.append("selfieKTP", selfieKtp);
@@ -1090,7 +1564,6 @@ const handleSave = async () => {
       );
     }
   };
-
 
   return (
     <PageBackground>
@@ -1134,7 +1607,9 @@ const handleSave = async () => {
 
                 {/* CARD UPLOAD KTP */}
                 <div
-                  onClick={() => handleCamera(ktpRef)}
+                  onClick={() =>
+                    handlePickImageSource(ktpCameraRef, ktpGalleryRef)
+                  }
                   className="flex flex-col items-center justify-center
                   h-40 rounded-2xl border-2 border-dashed border-slate-200
                   bg-white/80 cursor-pointer shadow-sm
@@ -1142,12 +1617,19 @@ const handleSave = async () => {
                   transition text-center"
                 >
                   <input
-                    ref={ktpRef}
+                    ref={ktpCameraRef}
                     type="file"
                     accept="image/*"
                     capture="environment"
                     className="hidden"
-                    onChange={(e) => setFotoKtp(e.target.files[0])}
+                    onChange={handleImageFileChange(setFotoKtp, "Foto KTP")}
+                  />
+                  <input
+                    ref={ktpGalleryRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleImageFileChange(setFotoKtp, "Foto KTP")}
                   />
 
                   <div className="text-blue-600 text-3xl mb-2">📄</div>
@@ -1181,7 +1663,9 @@ const handleSave = async () => {
 
               {/* FOTO SELFIE + KTP */}
               <div
-                onClick={() => handleCamera(selfieRef)}
+                onClick={() =>
+                  handlePickImageSource(selfieCameraRef, selfieGalleryRef)
+                }
                 className="flex flex-col items-center justify-center
                 h-40 rounded-2xl border-2 border-dashed border-slate-200
                 bg-white/80 cursor-pointer shadow-sm
@@ -1189,12 +1673,19 @@ const handleSave = async () => {
                 transition text-center"
               >
                 <input
-                  ref={selfieRef}
+                  ref={selfieCameraRef}
                   type="file"
                   accept="image/*"
                   capture="user"
                   className="hidden"
-                  onChange={(e) => setSelfieKtp(e.target.files[0])}
+                  onChange={handleImageFileChange(setSelfieKtp, "Selfie + KTP")}
+                />
+                <input
+                  ref={selfieGalleryRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleImageFileChange(setSelfieKtp, "Selfie + KTP")}
                 />
 
                 <div className="text-blue-600 text-3xl mb-2">🤳</div>
@@ -1374,7 +1865,12 @@ const handleSave = async () => {
 
             <div className="space-y-6">
               <div
-                onClick={() => handleCamera(ktpRefPasangan)}
+                onClick={() =>
+                  handlePickImageSource(
+                    ktpPasanganCameraRef,
+                    ktpPasanganGalleryRef
+                  )
+                }
                 className="flex flex-col items-center justify-center
                 h-40 rounded-xl border-2 border-dashed border-slate-200
                 bg-slate-50/80 cursor-pointer shadow-sm
@@ -1382,12 +1878,25 @@ const handleSave = async () => {
                 transition text-center"
               >
                 <input
-                  ref={ktpRefPasangan}
+                  ref={ktpPasanganCameraRef}
                   type="file"
                   accept="image/*"
                   capture="environment"
                   className="hidden"
-                  onChange={(e) => setFotoKtpPasangan(e.target.files[0])}
+                  onChange={handleImageFileChange(
+                    setFotoKtpPasangan,
+                    "Foto KTP Penanggung Jawab"
+                  )}
+                />
+                <input
+                  ref={ktpPasanganGalleryRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleImageFileChange(
+                    setFotoKtpPasangan,
+                    "Foto KTP Penanggung Jawab"
+                  )}
                 />
 
                 <div className="text-indigo-600 text-3xl mb-1">📄</div>
@@ -1498,6 +2007,7 @@ const handleSave = async () => {
           </div>
         </main>
       </div>
+
     </PageBackground>
   );
 }

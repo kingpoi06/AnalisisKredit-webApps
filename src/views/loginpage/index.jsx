@@ -33,7 +33,17 @@ const handleLogin = async (e) => {
       }
 
       const decoded = jwtDecode(accessToken);
-      const role = decoded.role?.toLowerCase();
+      const normalizeRole = (value) =>
+        String(value ?? "")
+          .toLowerCase()
+          .replace(/[_\s]+/g, "");
+      const roleValue =
+        decoded?.role ||
+        decoded?.user?.role ||
+        decoded?.jabatan ||
+        decoded?.level ||
+        "";
+      const role = normalizeRole(roleValue);
 
       // simpan token
       localStorage.setItem("accessToken", accessToken);
@@ -50,8 +60,17 @@ const handleLogin = async (e) => {
         case "komitecabang":
           navigate("/dashboard");
           break;
+        case "penyelia":
+          navigate("/dashboard");
+          break;
+        case "admin":
+          navigate("/dashboard-administrasi");
+          break;
         case "superadmin":
           navigate("/dashboard-monitoring-users");
+          break;
+        case "headofficer":
+          navigate("/dashboard-monitoring-pusat");
           break;
         default:
           setMsg("Role tidak dikenali");
@@ -70,11 +89,24 @@ const handleLogin = async (e) => {
     if (token) {
       try {
         const decoded = jwtDecode(token);
-        const role = decoded.role?.toLowerCase();
+        const normalizeRole = (value) =>
+          String(value ?? "")
+            .toLowerCase()
+            .replace(/[_\s]+/g, "");
+        const roleValue =
+          decoded?.role ||
+          decoded?.user?.role ||
+          decoded?.jabatan ||
+          decoded?.level ||
+          "";
+        const role = normalizeRole(roleValue);
 
         if (role === "officer") navigate("/dashboard");
-        if (role === "komitecabang") navigate("/dashboard-acc");
+        if (role === "komitecabang") navigate("/dashboard");
+        if (role === "penyelia") navigate("/dashboard");
+        if (role === "admin") navigate("/dashboard-administrasi");
         if (role === "superadmin") navigate("/dashboard-monitoring-users");
+        if (role === "headofficer") navigate("/dashboard-monitoring-pusat");
       } catch (err) {
         localStorage.removeItem("accessToken");
       }
@@ -93,8 +125,7 @@ const handleLogin = async (e) => {
             Selamat Datang
           </h1>
           <p className="text-gray-500 mb-8 leading-relaxed">
-            Akses informasi Analisis Kredit Nasabah secara aman
-            dan cepat melalui sistem ini.
+            Sistem Analisis Kredit Ter-Integrasi (SAKTI). Masuk untuk melanjutkan proses analisis dan pengelolaan data kredit.
           </p>
 
           <form onSubmit={handleLogin} className="space-y-5">
